@@ -1,0 +1,29 @@
+[
+  {
+    "video_id": "VIDEO_ID_HERE",
+    "channel_id": "UC_CHANNEL_ID",
+    "topics": ["consciousness", "spirituality"],
+    "chapter": "Example Chapter",
+    "start_seconds": 272,
+    "deep_link": "https://youtu.be/VIDEO_ID_HERE?t=272",
+    "text_content": "Replace with a real transcript excerpt of ~150 words covering the consciousness or spirituality topic. This chunk will be embedded and upserted into the Pinecone test namespace during quality test setup."
+  },
+  {
+    "video_id": "VIDEO_ID_HERE",
+    "channel_id": "UC_CHANNEL_ID",
+    "topics": ["biohacking"],
+    "chapter": "Biohacking Section",
+    "start_seconds": 540,
+    "deep_link": "https://youtu.be/VIDEO_ID_HERE?t=540",
+    "text_content": "Replace with a real transcript excerpt covering biohacking, longevity, or performance optimization. Include speaker name in a title like 'Show Title | Speaker Name' in the video metadata."
+  },
+  {
+    "video_id": "VIDEO_ID_2",
+    "channel_id": "UC_CHANNEL_ID",
+    "topics": ["alternative_history"],
+    "chapter": "Ancient Civilizations",
+    "start_seconds": 120,
+    "deep_link": "https://youtu.be/VIDEO_ID_2?t=120",
+    "text_content": "Replace with a real transcript excerpt covering alternative history, ancient civilizations, or lost knowledge. The content should be detailed enough (~150 words) to match relevant queries."
+  }
+]
