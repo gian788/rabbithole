@@ -35,16 +35,18 @@ def get_channel_default_topic(conn, channel_id: str) -> Optional[str]:
 # Conversation helpers
 # ---------------------------------------------------------------------------
 
-def create_conversation(conn, session_id: str, title: Optional[str] = None) -> str:
+def create_conversation(
+    conn, session_id: str, user_id: Optional[str] = None, title: Optional[str] = None
+) -> str:
     """Insert a new conversation row and return its UUID."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO conversations (session_id, title)
-            VALUES (%s, %s)
+            INSERT INTO conversations (session_id, user_id, title)
+            VALUES (%s, %s, %s)
             RETURNING id
             """,
-            (session_id, title),
+            (session_id, user_id, title),
         )
         conversation_id = str(cur.fetchone()[0])
     conn.commit()
@@ -85,6 +87,10 @@ def save_message(
             """,
             (conversation_id, role, content, citations_json),
         )
+        cur.execute(
+            "UPDATE conversations SET last_message_at = NOW() WHERE id = %s",
+            (conversation_id,),
+        )
     conn.commit()
 
 
@@ -101,3 +107,48 @@ def update_conversation(conn, conversation_id: str, topic: Optional[str] = None,
             (topic, title, conversation_id),
         )
     conn.commit()
+
+
+def get_conversation_owner(conn, conversation_id: str) -> Optional[str]:
+    """Return the user_id that owns this conversation, or None if anonymous/not found."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def get_user_conversations(conn, user_id: str, limit: int = 30) -> list[dict]:
+    """Return conversation summaries for a user, most recently active first."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+                c.id,
+                c.title,
+                c.topic,
+                c.last_message_at,
+                (
+                    SELECT content
+                    FROM messages m
+                    WHERE m.conversation_id = c.id AND m.role = 'assistant'
+                    ORDER BY m.created_at DESC
+                    LIMIT 1
+                ) AS last_assistant_message
+            FROM conversations c
+            WHERE c.user_id = %s AND c.last_message_at IS NOT NULL
+            ORDER BY c.last_message_at DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "id": str(r["id"]),
+            "title": r["title"] or "Untitled",
+            "topic": r["topic"],
+            "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+            "preview": (r["last_assistant_message"] or "")[:120],
+        }
+        for r in rows
+    ]

@@ -11,15 +11,23 @@ function uid() {
   return Math.random().toString(36).slice(2)
 }
 
-export function useRagChat(apiUrl: string) {
+export function useRagChat(apiUrl: string, authToken?: string) {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [authError, setAuthError] = useState(false)
   const conversationId = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  function authHeaders(): HeadersInit {
+    return authToken
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` }
+      : { 'Content-Type': 'application/json' }
+  }
 
   const sendMessage = useCallback(async (query: string) => {
     if (!query.trim() || isLoading) return
 
+    setAuthError(false)
     const userMsg: Message = { id: uid(), role: 'user', content: query }
     const assistantId = uid()
     const assistantMsg: Message = { id: assistantId, role: 'assistant', content: '', streaming: true }
@@ -32,7 +40,7 @@ export function useRagChat(apiUrl: string) {
     try {
       const res = await fetch(`${apiUrl}/v1/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           query,
           conversation_id: conversationId.current,
@@ -41,6 +49,11 @@ export function useRagChat(apiUrl: string) {
         signal: abortRef.current.signal,
       })
 
+      if (res.status === 401) {
+        setAuthError(true)
+        setMessages(prev => prev.filter(m => m.id !== assistantId))
+        return
+      }
       if (!res.ok) throw new Error(`API error ${res.status}`)
 
       const reader = res.body!.getReader()
@@ -93,7 +106,8 @@ export function useRagChat(apiUrl: string) {
     } finally {
       setIsLoading(false)
     }
-  }, [apiUrl, isLoading])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiUrl, authToken, isLoading])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -104,7 +118,30 @@ export function useRagChat(apiUrl: string) {
     conversationId.current = null
     setMessages([])
     setIsLoading(false)
+    setAuthError(false)
   }, [])
 
-  return { messages, isLoading, sendMessage, stop, reset }
+  const loadConversation = useCallback(async (id: string): Promise<boolean> => {
+    if (!authToken) return false
+    try {
+      const res = await fetch(`${apiUrl}/v1/conversations/${id}/messages`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (res.status === 401) { setAuthError(true); return false }
+      if (!res.ok) return false
+      const data = await res.json()
+      const loaded: Message[] = data.messages.map((m: { role: string; content: string }) => ({
+        id: uid(),
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }))
+      conversationId.current = id
+      setMessages(loaded)
+      return true
+    } catch {
+      return false
+    }
+  }, [apiUrl, authToken])
+
+  return { messages, isLoading, authError, sendMessage, stop, reset, loadConversation }
 }

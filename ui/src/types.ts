@@ -21,8 +21,17 @@ export interface Message {
   streaming?: boolean
 }
 
+export interface ConversationSummary {
+  id: string
+  title: string
+  topic?: string | null
+  last_message_at?: string | null
+  preview: string
+}
+
 export interface RagChatProps {
   apiUrl: string
+  authToken?: string
   placeholder?: string
   className?: string
   showHeader?: boolean

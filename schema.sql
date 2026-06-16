@@ -66,14 +66,16 @@ CREATE TABLE model_telemetry (
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Stores multi-turn chat sessions. session_id is a client-generated UUID (no accounts).
+-- Stores multi-turn chat sessions. user_id is an external identifier from the host app.
 CREATE TABLE conversations (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id  TEXT NOT NULL,
-    title       TEXT,                    -- set from the first user message
-    topic       TEXT,                    -- last predicted topic
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ DEFAULT NOW()
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id      TEXT NOT NULL,
+    user_id         TEXT,                    -- external user ID from host app JWT (nullable for anonymous)
+    title           TEXT,                    -- set from the first user message
+    topic           TEXT,                    -- last predicted topic
+    last_message_at TIMESTAMPTZ,             -- updated on every save_message call for efficient sorting
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE messages (
@@ -87,6 +89,8 @@ CREATE TABLE messages (
 
 -- Indexes
 CREATE INDEX idx_conversations_session   ON conversations(session_id);
+CREATE INDEX idx_conversations_user_id   ON conversations(user_id);
+CREATE INDEX idx_conversations_user_time ON conversations(user_id, last_message_at DESC);
 CREATE INDEX idx_messages_conversation   ON messages(conversation_id, created_at);
 CREATE INDEX idx_channels_topic  ON channels(default_topic_id);
 CREATE INDEX idx_videos_channel  ON videos(channel_id);

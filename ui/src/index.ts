@@ -1,2 +1,2 @@
 export { RagChat } from './components/RagChat'
-export type { RagChatProps, RagChatRef, Message, Source, Clip } from './types'
+export type { RagChatProps, RagChatRef, Message, Source, Clip, ConversationSummary } from './types'

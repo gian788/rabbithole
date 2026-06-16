@@ -20,9 +20,10 @@ from typing import Any, Iterator, Optional
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from jose import JWTError, jwt
 from mangum import Mangum
 from pinecone import Pinecone
 from pinecone_text.sparse import BM25Encoder
@@ -33,6 +34,8 @@ from core.db import (
     create_conversation,
     get_connection,
     get_conversation_messages,
+    get_conversation_owner,
+    get_user_conversations,
     save_message,
     update_conversation,
 )
@@ -49,6 +52,38 @@ _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 # Used for zero-latency classification via dot-product against the query vector.
 _topic_vectors: dict[str, list[float]] = {}
 _PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "")
+_WIDGET_SECRET      = os.environ.get("WIDGET_SECRET", "")
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+def get_current_user(authorization: str = Header(...)) -> str:
+    """Verify HS256 JWT from the widget and return the userId (sub claim). Requires auth."""
+    if not _WIDGET_SECRET:
+        raise HTTPException(status_code=500, detail="WIDGET_SECRET not configured")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        payload = jwt.decode(token, _WIDGET_SECRET, algorithms=["HS256"])
+        user_id: str = payload.get("sub", "")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: missing sub")
+        return user_id
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def optional_current_user(authorization: Optional[str] = Header(default=None)) -> Optional[str]:
+    """Like get_current_user but returns None when no Authorization header is sent."""
+    if not authorization or not _WIDGET_SECRET:
+        return None
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        payload = jwt.decode(token, _WIDGET_SECRET, algorithms=["HS256"])
+        return payload.get("sub") or None
+    except JWTError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +128,14 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
+
+class ConversationSummary(BaseModel):
+    id:              str
+    title:           str
+    topic:           Optional[str] = None
+    last_message_at: Optional[str] = None
+    preview:         str
+
 
 class ConversationRequest(BaseModel):
     session_id: Optional[str] = None
@@ -272,19 +315,31 @@ def health():
     return {"status": "ok", "timestamp": time.time()}
 
 
-@app.post("/v1/conversations", response_model=ConversationResponse)
-def create_conv(request: ConversationRequest):
+@app.get("/v1/conversations", response_model=list[ConversationSummary])
+def list_conversations(user_id: str = Depends(get_current_user)):
     _ensure_db(app.state)
-    db = app.state.db  # capture after potential reconnect
+    rows = get_user_conversations(app.state.db, user_id)
+    return [ConversationSummary(**r) for r in rows]
+
+
+@app.post("/v1/conversations", response_model=ConversationResponse)
+def create_conv(request: ConversationRequest, user_id: str = Depends(get_current_user)):
+    _ensure_db(app.state)
+    db = app.state.db
     session_id = request.session_id or "anonymous"
-    conversation_id = create_conversation(db, session_id=session_id)
+    conversation_id = create_conversation(db, session_id=session_id, user_id=user_id)
     return ConversationResponse(conversation_id=conversation_id, messages=[])
 
 
 @app.get("/v1/conversations/{conversation_id}/messages", response_model=ConversationResponse)
-def get_messages(conversation_id: str):
+def get_messages(conversation_id: str, user_id: str = Depends(get_current_user)):
     _ensure_db(app.state)
-    db = app.state.db  # capture after potential reconnect
+    db = app.state.db
+    owner = get_conversation_owner(db, conversation_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if owner != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     rows = get_conversation_messages(db, conversation_id, limit=50)
     messages = [
         MessageOut(
@@ -299,7 +354,7 @@ def get_messages(conversation_id: str):
 
 
 @app.post("/v1/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current_user)):
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query must not be empty")
@@ -314,7 +369,7 @@ def chat(request: ChatRequest):
     conversation_id = request.conversation_id
     session_id = request.session_id or "anonymous"
     if not conversation_id:
-        conversation_id = create_conversation(db, session_id=session_id, title=query[:100])
+        conversation_id = create_conversation(db, session_id=session_id, user_id=user_id, title=query[:100])
 
     # Load prior history (last 6 messages = 3 turns)
     history = get_conversation_messages(db, conversation_id, limit=6)
