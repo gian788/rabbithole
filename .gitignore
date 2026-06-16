@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# Environment variables — never commit real credentials
+.env
+
+# Local dev data (transcripts saved to disk, model cache)
+local_data/
+
+# Claude Code local config
+.claude/
+
+# UI dependencies and build output
+ui/node_modules/
+ui/dist/
+
+# Quality test seed data — contains real transcript excerpts, never commit
+tests/quality/fixtures/seed_chunks.json
