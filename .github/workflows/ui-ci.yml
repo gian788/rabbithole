@@ -1,0 +1,52 @@
+name: UI CI
+
+on:
+  pull_request:
+    paths:
+      - "ui/**"
+      - ".github/workflows/ui-ci.yml"
+
+jobs:
+  lint:
+    name: Lint & Format (ESLint + Prettier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: ui/yarn.lock
+
+      - name: Install dependencies
+        working-directory: ui
+        run: yarn install --frozen-lockfile
+
+      - name: ESLint
+        working-directory: ui
+        run: yarn lint
+
+      - name: Prettier
+        working-directory: ui
+        run: yarn format:check
+
+  test:
+    name: Test (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: ui/yarn.lock
+
+      - name: Install dependencies
+        working-directory: ui
+        run: yarn install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: ui
+        run: yarn test:run

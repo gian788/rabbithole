@@ -1,4 +1,5 @@
 import pytest
+
 from core.chunker import (
     _assign_chapter,
     _parse_timestamp,
@@ -7,7 +8,6 @@ from core.chunker import (
     fixed_word_chunking,
     segment_into_paragraphs,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_timestamp

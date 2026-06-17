@@ -9,7 +9,15 @@ interface Props {
 
 function ArrowUpIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-4 h-4"
+    >
       <path d="M12 19V5M5 12l7-7 7 7" />
     </svg>
   )
@@ -57,7 +65,7 @@ export function ChatInput({ onSend, onStop, isLoading, placeholder = 'Ask anythi
         ref={textareaRef}
         rows={1}
         value={value}
-        onChange={e => setValue(e.target.value)}
+        onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onInput={handleInput}
         placeholder={placeholder}

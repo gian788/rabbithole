@@ -8,7 +8,15 @@ import type { RagChatProps, RagChatRef } from '../types'
 
 function PencilIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-4 h-4"
+    >
       <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
     </svg>
   )
@@ -16,7 +24,15 @@ function PencilIcon() {
 
 function ClockIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-4 h-4"
+    >
       <circle cx="12" cy="12" r="10" />
       <path d="M12 6v6l4 2" />
     </svg>
@@ -25,7 +41,15 @@ function ClockIcon() {
 
 function ArrowLeftIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-4 h-4"
+    >
       <path d="M19 12H5M12 19l-7-7 7-7" />
     </svg>
   )
@@ -36,7 +60,10 @@ export const RagChat = forwardRef<RagChatRef, RagChatProps>(function RagChat(
   ref
 ) {
   const [view, setView] = useState<'chat' | 'history'>('chat')
-  const { messages, isLoading, authError, sendMessage, stop, reset, loadConversation } = useRagChat(apiUrl, authToken)
+  const { messages, isLoading, authError, sendMessage, stop, reset, loadConversation } = useRagChat(
+    apiUrl,
+    authToken
+  )
   const { conversations, isLoading: historyLoading, reload } = useConversations(apiUrl, authToken)
 
   useImperativeHandle(ref, () => ({ reset }), [reset])
@@ -59,7 +86,9 @@ export const RagChat = forwardRef<RagChatRef, RagChatProps>(function RagChat(
   const hasHistory = !!authToken
 
   return (
-    <div className={`flex flex-col bg-gray-50 rounded-2xl overflow-hidden border border-gray-200 shadow-sm ${className}`}>
+    <div
+      className={`flex flex-col bg-gray-50 rounded-2xl overflow-hidden border border-gray-200 shadow-sm ${className}`}
+    >
       {showHeader && (
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white shrink-0">
           {view === 'history' ? (
@@ -81,7 +110,10 @@ export const RagChat = forwardRef<RagChatRef, RagChatProps>(function RagChat(
               <div className="flex items-center gap-2">
                 {hasHistory && (
                   <button
-                    onClick={() => { reload(); setView('history') }}
+                    onClick={() => {
+                      reload()
+                      setView('history')
+                    }}
                     className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 transition-colors"
                     aria-label="Conversation history"
                   >
@@ -118,7 +150,12 @@ export const RagChat = forwardRef<RagChatRef, RagChatProps>(function RagChat(
       )}
 
       {view === 'chat' && (
-        <ChatInput onSend={handleSend} onStop={stop} isLoading={isLoading} placeholder={placeholder} />
+        <ChatInput
+          onSend={handleSend}
+          onStop={stop}
+          isLoading={isLoading}
+          placeholder={placeholder}
+        />
       )}
     </div>
   )

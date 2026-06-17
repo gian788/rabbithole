@@ -1,7 +1,7 @@
-import json
 import importlib
-import pytest
+import json
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers: load module-level private functions without triggering heavy init
@@ -10,7 +10,7 @@ import pytest
 def _get_helpers():
     """Import helpers without triggering BM25/CrossEncoder/Pinecone init."""
     # Patch the expensive module-level calls before import
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     with patch("pinecone_text.sparse.BM25Encoder.default", return_value=MagicMock()), \
          patch("sentence_transformers.CrossEncoder", return_value=MagicMock()), \
          patch("retrieval.main.get_connection", return_value=MagicMock()), \

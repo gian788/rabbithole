@@ -2,7 +2,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { RagChat } from './RagChat'
-import { sseResponse, jsonResponse, DONE_EVENT, MOCK_CONVERSATIONS, MOCK_MESSAGES } from '../test/sse'
+import {
+  sseResponse,
+  jsonResponse,
+  DONE_EVENT,
+  MOCK_CONVERSATIONS,
+  MOCK_MESSAGES,
+} from '../test/sse'
 
 const API_URL = 'http://localhost:8000'
 const AUTH_TOKEN = 'test-token'
@@ -73,9 +79,7 @@ describe('RagChat — auth error', () => {
 
     await userEvent.type(screen.getByRole('textbox'), 'hi{Enter}')
 
-    await waitFor(() =>
-      expect(screen.getByText(/session expired/i)).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText(/session expired/i)).toBeInTheDocument())
   })
 })
 
@@ -83,7 +87,7 @@ describe('RagChat — history panel', () => {
   it('switches to history view when clock icon is clicked', async () => {
     mockFetchSequence(
       jsonResponse(MOCK_CONVERSATIONS), // useConversations on mount
-      jsonResponse(MOCK_CONVERSATIONS), // reload on clock click
+      jsonResponse(MOCK_CONVERSATIONS) // reload on clock click
     )
     render(<RagChat apiUrl={API_URL} authToken={AUTH_TOKEN} />)
 
@@ -93,16 +97,11 @@ describe('RagChat — history panel', () => {
     await userEvent.click(screen.getByRole('button', { name: /conversation history/i }))
 
     expect(screen.getByText('History')).toBeInTheDocument()
-    await waitFor(() =>
-      expect(screen.getByText('What is consciousness?')).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText('What is consciousness?')).toBeInTheDocument())
   })
 
   it('back button returns to chat view', async () => {
-    mockFetchSequence(
-      jsonResponse(MOCK_CONVERSATIONS),
-      jsonResponse(MOCK_CONVERSATIONS),
-    )
+    mockFetchSequence(jsonResponse(MOCK_CONVERSATIONS), jsonResponse(MOCK_CONVERSATIONS))
     render(<RagChat apiUrl={API_URL} authToken={AUTH_TOKEN} />)
 
     await waitFor(() =>
@@ -116,9 +115,9 @@ describe('RagChat — history panel', () => {
 
   it('clicking a conversation card loads it and returns to chat', async () => {
     mockFetchSequence(
-      jsonResponse(MOCK_CONVERSATIONS),    // useConversations on mount
-      jsonResponse(MOCK_CONVERSATIONS),    // reload triggered by clock click
-      jsonResponse(MOCK_MESSAGES),         // loadConversation fetch
+      jsonResponse(MOCK_CONVERSATIONS), // useConversations on mount
+      jsonResponse(MOCK_CONVERSATIONS), // reload triggered by clock click
+      jsonResponse(MOCK_MESSAGES) // loadConversation fetch
     )
     render(<RagChat apiUrl={API_URL} authToken={AUTH_TOKEN} />)
 
@@ -135,11 +134,11 @@ describe('RagChat — history panel', () => {
     await userEvent.click(screen.getByText('What is consciousness?'))
 
     // Should return to chat view and show loaded messages
+    await waitFor(() => expect(screen.queryByText('History')).not.toBeInTheDocument())
     await waitFor(() =>
-      expect(screen.queryByText('History')).not.toBeInTheDocument()
-    )
-    await waitFor(() =>
-      expect(screen.getByText('Consciousness is awareness of oneself and the environment.')).toBeInTheDocument()
+      expect(
+        screen.getByText('Consciousness is awareness of oneself and the environment.')
+      ).toBeInTheDocument()
     )
   })
 })

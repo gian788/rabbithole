@@ -33,8 +33,11 @@ export function MessageList({ messages }: Props) {
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-      {messages.map(msg => (
-        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      {messages.map((msg) => (
+        <div
+          key={msg.id}
+          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+        >
           <div className="max-w-[85%] space-y-2">
             <div
               className={
@@ -56,7 +59,7 @@ export function MessageList({ messages }: Props) {
             </div>
             {!msg.streaming && msg.sources && msg.sources.length > 0 && (
               <div className="space-y-1.5">
-                {msg.sources.map(src => (
+                {msg.sources.map((src) => (
                   <SourceCard key={src.video_id} source={src} />
                 ))}
               </div>

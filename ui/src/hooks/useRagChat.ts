@@ -18,96 +18,104 @@ export function useRagChat(apiUrl: string, authToken?: string) {
   const conversationId = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
-  function authHeaders(): HeadersInit {
-    return authToken
-      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` }
-      : { 'Content-Type': 'application/json' }
-  }
+  const sendMessage = useCallback(
+    async (query: string) => {
+      if (!query.trim() || isLoading) return
 
-  const sendMessage = useCallback(async (query: string) => {
-    if (!query.trim() || isLoading) return
-
-    setAuthError(false)
-    const userMsg: Message = { id: uid(), role: 'user', content: query }
-    const assistantId = uid()
-    const assistantMsg: Message = { id: assistantId, role: 'assistant', content: '', streaming: true }
-
-    setMessages(prev => [...prev, userMsg, assistantMsg])
-    setIsLoading(true)
-
-    abortRef.current = new AbortController()
-
-    try {
-      const res = await fetch(`${apiUrl}/v1/chat`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          query,
-          conversation_id: conversationId.current,
-          stream: true,
-        }),
-        signal: abortRef.current.signal,
-      })
-
-      if (res.status === 401) {
-        setAuthError(true)
-        setMessages(prev => prev.filter(m => m.id !== assistantId))
-        return
+      setAuthError(false)
+      const userMsg: Message = { id: uid(), role: 'user', content: query }
+      const assistantId = uid()
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        streaming: true,
       }
-      if (!res.ok) throw new Error(`API error ${res.status}`)
 
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
+      setMessages((prev) => [...prev, userMsg, assistantMsg])
+      setIsLoading(true)
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      abortRef.current = new AbortController()
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
+      try {
+        const res = await fetch(`${apiUrl}/v1/chat`, {
+          method: 'POST',
+          headers: authToken
+            ? { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` }
+            : { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query,
+            conversation_id: conversationId.current,
+            stream: true,
+          }),
+          signal: abortRef.current.signal,
+        })
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const payload = JSON.parse(line.slice(6))
+        if (res.status === 401) {
+          setAuthError(true)
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId))
+          return
+        }
+        if (!res.ok) throw new Error(`API error ${res.status}`)
 
-          if (payload.type === 'token') {
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantId ? { ...m, content: m.content + payload.content } : m
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            const payload = JSON.parse(line.slice(6))
+
+            if (payload.type === 'token') {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: m.content + payload.content } : m
+                )
               )
-            )
-          }
+            }
 
-          if (payload.type === 'done') {
-            const donePayload = payload as DonePayload
-            conversationId.current = donePayload.conversation_id
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, streaming: false, topic: donePayload.topic, sources: donePayload.sources }
-                  : m
+            if (payload.type === 'done') {
+              const donePayload = payload as DonePayload
+              conversationId.current = donePayload.conversation_id
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        streaming: false,
+                        topic: donePayload.topic,
+                        sources: donePayload.sources,
+                      }
+                    : m
+                )
               )
-            )
+            }
           }
         }
-      }
-    } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantId
-              ? { ...m, content: 'Something went wrong. Please try again.', streaming: false }
-              : m
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: 'Something went wrong. Please try again.', streaming: false }
+                : m
+            )
           )
-        )
+        }
+      } finally {
+        setIsLoading(false)
       }
-    } finally {
-      setIsLoading(false)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiUrl, authToken, isLoading])
+    },
+    [apiUrl, authToken, isLoading]
+  )
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -121,27 +129,33 @@ export function useRagChat(apiUrl: string, authToken?: string) {
     setAuthError(false)
   }, [])
 
-  const loadConversation = useCallback(async (id: string): Promise<boolean> => {
-    if (!authToken) return false
-    try {
-      const res = await fetch(`${apiUrl}/v1/conversations/${id}/messages`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      })
-      if (res.status === 401) { setAuthError(true); return false }
-      if (!res.ok) return false
-      const data = await res.json()
-      const loaded: Message[] = data.messages.map((m: { role: string; content: string }) => ({
-        id: uid(),
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }))
-      conversationId.current = id
-      setMessages(loaded)
-      return true
-    } catch {
-      return false
-    }
-  }, [apiUrl, authToken])
+  const loadConversation = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!authToken) return false
+      try {
+        const res = await fetch(`${apiUrl}/v1/conversations/${id}/messages`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        })
+        if (res.status === 401) {
+          setAuthError(true)
+          return false
+        }
+        if (!res.ok) return false
+        const data = await res.json()
+        const loaded: Message[] = data.messages.map((m: { role: string; content: string }) => ({
+          id: uid(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }))
+        conversationId.current = id
+        setMessages(loaded)
+        return true
+      } catch {
+        return false
+      }
+    },
+    [apiUrl, authToken]
+  )
 
   return { messages, isLoading, authError, sendMessage, stop, reset, loadConversation }
 }

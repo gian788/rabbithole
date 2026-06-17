@@ -17,7 +17,6 @@ import re
 import sys
 
 import boto3
-import psycopg2
 from pinecone import Pinecone
 from pinecone_text.sparse import BM25Encoder
 from youtube_transcript_api import (

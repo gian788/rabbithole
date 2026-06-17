@@ -12,9 +12,7 @@ beforeEach(() => {
 
 describe('useRagChat — sendMessage', () => {
   it('posts to /v1/chat with query and stream:true', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      sseResponse([DONE_EVENT])
-    )
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(sseResponse([DONE_EVENT]))
     const { result } = renderHook(() => useRagChat(API_URL))
 
     await act(async () => {
@@ -28,14 +26,13 @@ describe('useRagChat — sendMessage', () => {
         body: expect.stringContaining('"stream":true'),
       })
     )
-    expect(JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string).query)
-      .toBe('What is consciousness?')
+    expect(JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string).query).toBe(
+      'What is consciousness?'
+    )
   })
 
   it('sends Authorization header when authToken provided', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      sseResponse([DONE_EVENT])
-    )
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(sseResponse([DONE_EVENT]))
     const { result } = renderHook(() => useRagChat(API_URL, AUTH_TOKEN))
 
     await act(async () => {
@@ -60,7 +57,7 @@ describe('useRagChat — sendMessage', () => {
       await result.current.sendMessage('hi')
     })
 
-    const assistant = result.current.messages.find(m => m.role === 'assistant')
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
     expect(assistant?.content).toBe('Hello world')
     expect(assistant?.streaming).toBe(false)
   })
@@ -104,7 +101,7 @@ describe('useRagChat — sendMessage', () => {
       await result.current.sendMessage('hi')
     })
 
-    const assistant = result.current.messages.find(m => m.role === 'assistant')
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
     expect(assistant?.content).toMatch(/something went wrong/i)
     expect(assistant?.streaming).toBe(false)
   })
@@ -120,7 +117,9 @@ describe('useRagChat — reset', () => {
     })
     expect(result.current.messages).toHaveLength(2)
 
-    act(() => { result.current.reset() })
+    act(() => {
+      result.current.reset()
+    })
 
     expect(result.current.messages).toHaveLength(0)
     expect(result.current.isLoading).toBe(false)
@@ -130,12 +129,18 @@ describe('useRagChat — reset', () => {
   it('clears conversationId so next message starts a new conversation', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(sseResponse([DONE_EVENT]))
     const { result } = renderHook(() => useRagChat(API_URL))
-    await act(async () => { await result.current.sendMessage('hi') })
+    await act(async () => {
+      await result.current.sendMessage('hi')
+    })
 
-    act(() => { result.current.reset() })
+    act(() => {
+      result.current.reset()
+    })
 
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(sseResponse([DONE_EVENT]))
-    await act(async () => { await result.current.sendMessage('new chat') })
+    await act(async () => {
+      await result.current.sendMessage('new chat')
+    })
 
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
     expect(body.conversation_id).toBeNull()
@@ -189,16 +194,22 @@ describe('useRagChat — stop', () => {
   it('aborts the in-flight request', async () => {
     let abortCalled = false
     vi.spyOn(global, 'fetch').mockImplementation((_url, init) => {
-      init?.signal?.addEventListener('abort', () => { abortCalled = true })
+      init?.signal?.addEventListener('abort', () => {
+        abortCalled = true
+      })
       return new Promise(() => {}) // never resolves
     })
 
     const { result } = renderHook(() => useRagChat(API_URL))
 
-    act(() => { result.current.sendMessage('hi') })
+    act(() => {
+      result.current.sendMessage('hi')
+    })
     await waitFor(() => expect(result.current.isLoading).toBe(true))
 
-    act(() => { result.current.stop() })
+    act(() => {
+      result.current.stop()
+    })
     await waitFor(() => expect(abortCalled).toBe(true))
   })
 })

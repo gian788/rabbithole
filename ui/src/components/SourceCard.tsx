@@ -15,7 +15,9 @@ export function SourceCard({ source }: Props) {
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
       <p className="font-medium text-gray-800 leading-snug">{source.title}</p>
       {source.speaker && (
-        <p className="text-gray-500 mt-0.5">{source.speaker} · {source.channel}</p>
+        <p className="text-gray-500 mt-0.5">
+          {source.speaker} · {source.channel}
+        </p>
       )}
       <div className="mt-2 flex flex-wrap gap-2">
         {source.clips.map((clip, i) => (

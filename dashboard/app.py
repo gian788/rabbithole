@@ -7,6 +7,7 @@ Run:  streamlit run dashboard/app.py
 import os
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import boto3

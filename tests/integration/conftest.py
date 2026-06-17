@@ -1,6 +1,7 @@
 import importlib
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 FAKE_MATCHES = [
     {"metadata": {

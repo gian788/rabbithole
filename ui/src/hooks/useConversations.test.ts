@@ -12,9 +12,7 @@ beforeEach(() => {
 
 describe('useConversations', () => {
   it('fetches conversations on mount when authToken is provided', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      jsonResponse(MOCK_CONVERSATIONS)
-    )
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(jsonResponse(MOCK_CONVERSATIONS))
     const { result } = renderHook(() => useConversations(API_URL, AUTH_TOKEN))
 
     await waitFor(() => expect(result.current.isLoading).toBe(false))
@@ -40,14 +38,17 @@ describe('useConversations', () => {
   })
 
   it('reload triggers a new fetch and updates the list', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch')
+    const fetchSpy = vi
+      .spyOn(global, 'fetch')
       .mockResolvedValueOnce(jsonResponse([MOCK_CONVERSATIONS[0]]))
       .mockResolvedValueOnce(jsonResponse(MOCK_CONVERSATIONS))
 
     const { result } = renderHook(() => useConversations(API_URL, AUTH_TOKEN))
     await waitFor(() => expect(result.current.conversations).toHaveLength(1))
 
-    await act(async () => { await result.current.reload() })
+    await act(async () => {
+      await result.current.reload()
+    })
 
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(result.current.conversations).toHaveLength(2)

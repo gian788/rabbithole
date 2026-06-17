@@ -1,4 +1,3 @@
-import psycopg2.extras
 from unittest.mock import MagicMock
 
 

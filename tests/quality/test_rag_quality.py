@@ -10,6 +10,7 @@ Required setup:
 These tests are excluded from the default run (addopts = "-m 'not quality'").
 """
 import re
+
 import pytest
 
 pytestmark = pytest.mark.quality
@@ -118,7 +119,6 @@ def test_graceful_no_match(real_client):
 
 
 def test_streaming_completeness(real_client):
-    import json
     from tests.conftest import parse_sse_events
 
     resp = real_client.post("/v1/chat", json={"query": "What is the demiurge?", "stream": True})

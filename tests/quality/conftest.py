@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+
 import pytest
 from dotenv import load_dotenv
 
@@ -87,6 +88,7 @@ def seed_pinecone(test_schema):
     """Embed seed chunks and upsert into the 'test' Pinecone namespace. Clean up after session."""
     from pinecone import Pinecone
     from pinecone_text.sparse import BM25Encoder
+
     from core.gateway import ModelGateway
 
     chunks = json.loads(FIXTURE_FILE.read_text())
@@ -124,7 +126,7 @@ def seed_pinecone(test_schema):
 def real_client(real_db, seed_pinecone):
     """Live TestClient pointing at the test schema and test Pinecone namespace."""
     import os
-    from unittest.mock import patch
+
     from fastapi.testclient import TestClient
 
     os.environ["PINECONE_NAMESPACE"] = "test"

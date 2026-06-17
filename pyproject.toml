@@ -37,7 +37,19 @@ dev = [
     "pytest>=8.0.0",
     "httpx>=0.27.0",           # FastAPI TestClient dependency
     "python-dotenv>=1.0.0",    # load .env in quality tests + local dev scripts
+    "ruff>=0.4.0",             # lint + format
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E402"]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

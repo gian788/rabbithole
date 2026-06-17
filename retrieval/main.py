@@ -99,7 +99,6 @@ async def lifespan(app: FastAPI):
     app.state.gateway = ModelGateway(db_conn=app.state.db)
 
     # Pre-embed topic descriptions for fast query-time classification
-    from core.db import get_topic_names
     import psycopg2.extras
     with app.state.db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT name, description FROM topics")

@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
 from .conftest import FAKE_MATCHES, FAKE_VIDEO_META
 
 KNOWN_TOPICS = {"consciousness", "biohacking", "spirituality", "alternative_history"}

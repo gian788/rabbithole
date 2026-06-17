@@ -1,4 +1,5 @@
 import pytest
+
 from ingestion.fetch_lambda import _is_short
 
 

@@ -1,7 +1,7 @@
-import os
 import json
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
 
 
 def _make_db(status="discovered", title="Ep 1 | Guest", description="0:00 Intro\n2:00 Main\n10:00 Outro"):
@@ -226,8 +226,9 @@ def test_empty_sparse_indices_skipped(mock_save, mock_topic, mock_names, mock_ap
 def test_local_s3_path_writes_to_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("S3_LOCAL_PATH", str(tmp_path))
 
-    from ingestion import worker_lambda
     import importlib
+
+    from ingestion import worker_lambda
     importlib.reload(worker_lambda)
 
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 End")
