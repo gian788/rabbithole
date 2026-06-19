@@ -2,7 +2,12 @@
 
 ## Responsibility
 
-`ingestion/worker_lambda.py` + `core/gateway.py` — generates dense and sparse vector representations for each paragraph chunk and upserts them into Pinecone with structured metadata.
+Two workers share the same embedding pipeline:
+
+- `ingestion/worker_lambda.py` — embeds YouTube transcript chunks
+- `ingestion/article_worker.py` — embeds article section chunks
+
+Both call `core/gateway.py` for embeddings and `core/topics.py` for topic classification, then upsert to the configured `VectorStore`.
 
 ---
 
@@ -144,5 +149,70 @@ SET status = 'completed',
     processed_at     = NOW()
 WHERE id = %(video_id)s
 ```
+
+---
+
+## VectorStore Abstraction (`core/vector_store.py`)
+
+Both workers call `store.upsert(ids, embeddings, metadatas, texts)` via the `VectorStore` interface, which dispatches to the correct backend:
+
+**`PineconeStore`** (production, `VECTOR_STORE=pinecone`):
+- Hybrid dense + BM25 sparse upsert
+- BM25 computed per chunk from `pinecone_text.BM25Encoder.default()`
+- Chunks with empty BM25 indices (all stopwords) are skipped
+- Batched in groups of 100
+
+**`ChromaStore`** (local dev, `VECTOR_STORE=chroma`):
+- Dense-only upsert; Chroma handles indexing
+- List metadata values converted to JSON strings (Chroma restriction)
+- `None` metadata values dropped before upsert
+
+### Vector Metadata Schema
+
+All vectors carry `source_type` to allow polymorphic retrieval:
+
+```python
+# YouTube video chunk
+{
+    "source_type":   "youtube_video",
+    "video_id":      "dQw4w9WgXcQ",
+    "channel_id":    "UCxxxxxxxxx",
+    "topics":        ["consciousness", "biohacking"],  # Pinecone $in filter
+    "primary_topic": "consciousness",                  # Chroma $eq filter
+    "chapter":       "The Pineal Gland and DMT",
+    "start_seconds": 145,
+    "deep_link":     "https://youtu.be/dQw4w9WgXcQ?t=145",
+    "text_content":  "..."  # truncated to 1000 chars in PineconeStore
+}
+
+# Article section chunk
+{
+    "source_type":   "article",
+    "article_id":    "550e8400-e29b-41d4-a716-446655440000",
+    "website_id":    "hubermanlab.com",
+    "topics":        ["biohacking"],
+    "primary_topic": "biohacking",
+    "chapter":       "Cold Exposure Protocols",
+    "section_slug":  "cold-exposure-protocols",
+    "deep_link":     "https://hubermanlab.com/post#cold-exposure-protocols",
+    "text_content":  "..."
+}
+```
+
+Old YouTube vectors without `source_type` default to `"youtube_video"` via `.get("source_type", "youtube_video")` in retrieval — no migration required.
+
+---
+
+## Article Chunking (`core/article_fetcher.py`)
+
+Articles are chunked by HTML structure rather than transcript timestamps:
+
+1. `fetch_article(url)` — HTTP GET, extracts title/author/published_at via Open Graph and `<time>` tags
+2. `extract_sections(html_body, url)` — finds H2/H3 headings, accumulates `<p>` text per section
+   - Sections < 50 words are merged into the preceding section
+   - Fallback to sliding-window word chunks (300 words, 50 overlap) when no headings exist
+   - Each chunk's `deep_link` is `url#slugified-heading`
+
+Topic classification runs identically via `core/topics.py::classify_topics()`, shared with the video worker.
 
 `total_cost` = sum of embedding costs + topic classification cost + chapter generation cost (if LLM was used).

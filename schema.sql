@@ -98,6 +98,47 @@ CREATE INDEX idx_videos_status   ON videos(status);
 CREATE INDEX idx_videos_topics   ON videos USING GIN(topics);  -- fast array containment queries
 CREATE INDEX idx_telemetry_model ON model_telemetry(model);
 
+-- ---------------------------------------------------------------------------
+-- Article ingestion (symmetric with channels/videos)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE websites (
+    id                VARCHAR(100) PRIMARY KEY,  -- e.g. "hubermanlab.com"
+    name              VARCHAR(255) NOT NULL,
+    base_url          TEXT NOT NULL,
+    rss_url           TEXT,                      -- NULL → fall back to sitemap.xml
+    default_topic_id  INT REFERENCES topics(id) ON DELETE SET NULL,
+    articles_to_fetch INT DEFAULT 10,            -- max new articles per poll run
+    max_articles      INT DEFAULT 100,           -- hard cap on total indexed articles
+    is_active         BOOLEAN DEFAULT TRUE,
+    last_checked_at   TIMESTAMP WITH TIME ZONE,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE articles (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    website_id       VARCHAR(100) REFERENCES websites(id) ON DELETE CASCADE,
+    url              TEXT NOT NULL UNIQUE,       -- deduplication key
+    title            VARCHAR(500) NOT NULL,
+    author           VARCHAR(255),
+    published_at     TIMESTAMP WITH TIME ZONE,
+    topics           TEXT[]  DEFAULT '{}',
+    primary_topic    VARCHAR(100),
+    status           VARCHAR(20) DEFAULT 'discovered',  -- discovered|processing|completed|failed
+    error_message    TEXT,
+    s3_path          VARCHAR(512),
+    ingestion_tokens INT     DEFAULT 0,
+    ingestion_cost   NUMERIC(10, 6) DEFAULT 0,
+    processed_at     TIMESTAMP WITH TIME ZONE,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_articles_status  ON articles(status);
+CREATE INDEX idx_articles_website ON articles(website_id);
+CREATE INDEX idx_articles_topics  ON articles USING GIN(topics);
+
+ALTER TABLE rag_queries ADD COLUMN article_ids TEXT[] DEFAULT '{}';
+
 -- Seed topics
 INSERT INTO topics (name, description) VALUES
     ('consciousness',       'Human consciousness, mind, awareness, and perception'),

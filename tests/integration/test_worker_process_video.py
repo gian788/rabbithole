@@ -48,62 +48,49 @@ def _make_gateway(topics=None):
     return gw
 
 
-def _make_bm25():
-    bm25 = MagicMock()
-    bm25.encode_documents.return_value = [{"indices": [1, 2], "values": [0.5, 0.5]}]
-    return bm25
-
-
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
-def test_already_completed_skips(mock_api_cls, mock_sponsor, mock_bm25_cls):
-    mock_bm25_cls.return_value = _make_bm25()
+def test_already_completed_skips(mock_api_cls, mock_sponsor):
     conn, cur = _make_db(status="completed")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
 
     from ingestion.worker_lambda import process_video
-    process_video("vid1", "ch1", conn, None, mock_index, gw)
+    process_video("vid1", "ch1", conn, None, mock_store, gw)
 
     mock_api_cls.return_value.fetch.assert_not_called()
-    mock_index.upsert.assert_not_called()
+    mock_store.upsert.assert_not_called()
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness", "biohacking"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-def test_happy_path_marks_completed(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor, mock_bm25_cls):
-    mock_bm25_cls.return_value = _make_bm25()
+def test_happy_path_marks_completed(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor):
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 Wrap")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
 
     from ingestion.worker_lambda import process_video
-    process_video("vid1", "ch1", conn, None, mock_index, gw)
+    process_video("vid1", "ch1", conn, None, mock_store, gw)
 
-    mock_index.upsert.assert_called()
-    # Verify status was set to completed at some point
+    mock_store.upsert.assert_called()
     execute_calls = [str(c) for c in cur.execute.call_args_list]
     assert any("completed" in c for c in execute_calls)
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-def test_description_without_chapters_calls_llm(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor, mock_bm25_cls):
-    mock_bm25_cls.return_value = _make_bm25()
+def test_description_without_chapters_calls_llm(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor):
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     # No chapter timestamps in description
     conn, cur = _make_db(description="Great episode about consciousness.")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
     # LLM chapter generation: first call returns 4 chapters, second returns topics
     chapters_json = json.dumps([
@@ -118,23 +105,21 @@ def test_description_without_chapters_calls_llm(mock_save, mock_topic, mock_name
     ]
 
     from ingestion.worker_lambda import process_video
-    process_video("vid1", "ch1", conn, None, mock_index, gw)
+    process_video("vid1", "ch1", conn, None, mock_store, gw)
 
     # gateway.get_completion called at least twice: chapter gen + topic classification
     assert gw.get_completion.call_count >= 2
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-def test_llm_returns_few_chapters_uses_fixed_chunking(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor, mock_bm25_cls):
-    mock_bm25_cls.return_value = _make_bm25()
+def test_llm_returns_few_chapters_uses_fixed_chunking(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor):
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db(description="No timestamps here.")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
     # Chapter gen returns only 1 chapter → fallback to fixed_word_chunking
     gw.get_completion.side_effect = [
@@ -145,82 +130,67 @@ def test_llm_returns_few_chapters_uses_fixed_chunking(mock_save, mock_topic, moc
     from ingestion.worker_lambda import process_video
 
     with patch("ingestion.worker_lambda.fixed_word_chunking", wraps=__import__("core.chunker", fromlist=["fixed_word_chunking"]).fixed_word_chunking) as mock_fixed:
-        process_video("vid1", "ch1", conn, None, mock_index, gw)
+        process_video("vid1", "ch1", conn, None, mock_store, gw)
         mock_fixed.assert_called_once()
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
-def test_transcripts_disabled_sets_failed(mock_api_cls, mock_sponsor, mock_bm25_cls):
+def test_transcripts_disabled_sets_failed(mock_api_cls, mock_sponsor):
     from youtube_transcript_api import TranscriptsDisabled
-    mock_bm25_cls.return_value = _make_bm25()
     mock_api_cls.return_value.fetch.side_effect = TranscriptsDisabled("vid1")
     conn, cur = _make_db()
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
 
     from ingestion.worker_lambda import process_video
-    process_video("vid1", "ch1", conn, None, mock_index, gw)  # must NOT raise
+    process_video("vid1", "ch1", conn, None, mock_store, gw)  # must NOT raise
 
     execute_calls = [str(c) for c in cur.execute.call_args_list]
     assert any("failed" in c for c in execute_calls)
-    mock_index.upsert.assert_not_called()
+    mock_store.upsert.assert_not_called()
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
-def test_embed_exception_reraises(mock_topic, mock_names, mock_api_cls, mock_sponsor, mock_bm25_cls):
-    mock_bm25_cls.return_value = _make_bm25()
+def test_embed_exception_reraises(mock_topic, mock_names, mock_api_cls, mock_sponsor):
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 End")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
     gw.get_completion.return_value = MagicMock(text_content='["consciousness"]', cost=0.001)
     gw.get_embedding.side_effect = RuntimeError("OpenAI down")
 
     from ingestion.worker_lambda import process_video
     with pytest.raises(RuntimeError, match="OpenAI down"):
-        process_video("vid1", "ch1", conn, None, mock_index, gw)
+        process_video("vid1", "ch1", conn, None, mock_store, gw)
 
     execute_calls = [str(c) for c in cur.execute.call_args_list]
     assert any("failed" in c for c in execute_calls)
 
 
-@patch("ingestion.worker_lambda.BM25Encoder.default")
 @patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
 @patch("ingestion.worker_lambda.YouTubeTranscriptApi")
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-def test_empty_sparse_indices_skipped(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor, mock_bm25_cls):
-    bm25 = MagicMock()
-    # First chunk: empty indices (should be skipped); remaining: valid
-    bm25.encode_documents.side_effect = [
-        [{"indices": [], "values": []}],
-        *([[{"indices": [1], "values": [0.5]}]] * 20),  # enough for any number of chunks
-    ]
-    mock_bm25_cls.return_value = bm25
+def test_store_upsert_called_with_correct_metadata(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor):
+    """store.upsert receives ids/embeddings/metadatas/texts with correct source_type and primary_topic."""
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 End")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
 
     from ingestion.worker_lambda import process_video
-    process_video("vid1", "ch1", conn, None, mock_index, gw)
+    process_video("vid1", "ch1", conn, None, mock_store, gw)
 
-    # At least one chunk should have been skipped (empty indices) and at least one upserted
-    assert mock_index.upsert.called
-    total_vectors = sum(
-        len(call.kwargs.get("vectors", call.args[0] if call.args else []))
-        for call in mock_index.upsert.call_args_list
-    )
-    # Without the skip, all chunks would be upserted; verify at least the empty one was skipped
-    # (can't assert exact count without knowing chunk count, but upsert was called)
-    assert total_vectors >= 1
+    mock_store.upsert.assert_called()
+    call_kwargs = mock_store.upsert.call_args.kwargs
+    assert len(call_kwargs["ids"]) > 0
+    assert all(m.get("source_type") == "youtube_video" for m in call_kwargs["metadatas"])
+    assert all("primary_topic" in m for m in call_kwargs["metadatas"])
 
 
 def test_local_s3_path_writes_to_disk(tmp_path, monkeypatch):
@@ -232,21 +202,16 @@ def test_local_s3_path_writes_to_disk(tmp_path, monkeypatch):
     importlib.reload(worker_lambda)
 
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 End")
-    mock_index = MagicMock()
+    mock_store = MagicMock()
     gw = _make_gateway()
-
-    bm25 = _make_bm25()
     fake_transcript = _fake_transcript()
 
-    with patch.object(worker_lambda, "BM25Encoder") as mock_bm25_cls, \
-         patch.object(worker_lambda, "YouTubeTranscriptApi") as mock_api_cls, \
+    with patch.object(worker_lambda, "YouTubeTranscriptApi") as mock_api_cls, \
          patch.object(worker_lambda, "fetch_sponsor_segments", return_value=[]), \
          patch.object(worker_lambda, "get_topic_names", return_value=["consciousness"]), \
          patch.object(worker_lambda, "get_channel_default_topic", return_value="consciousness"):
-        mock_bm25_cls.default.return_value = bm25
-        worker_lambda._bm25 = bm25
         mock_api_cls.return_value.fetch.return_value = fake_transcript
-        worker_lambda.process_video("vid1", "ch1", conn, None, mock_index, gw)
+        worker_lambda.process_video("vid1", "ch1", conn, None, mock_store, gw)
 
     saved_files = list(tmp_path.rglob("*.json"))
     assert len(saved_files) >= 1

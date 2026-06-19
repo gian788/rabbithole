@@ -8,13 +8,11 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _get_helpers():
-    """Import helpers without triggering BM25/CrossEncoder/Pinecone init."""
-    # Patch the expensive module-level calls before import
+    """Import helpers without triggering CrossEncoder/get_vector_store init."""
     from unittest.mock import MagicMock, patch
-    with patch("pinecone_text.sparse.BM25Encoder.default", return_value=MagicMock()), \
-         patch("sentence_transformers.CrossEncoder", return_value=MagicMock()), \
+    with patch("sentence_transformers.CrossEncoder", return_value=MagicMock()), \
          patch("retrieval.main.get_connection", return_value=MagicMock()), \
-         patch("retrieval.main.Pinecone", return_value=MagicMock()), \
+         patch("retrieval.main.get_vector_store", return_value=MagicMock()), \
          patch("retrieval.main.ModelGateway", return_value=MagicMock()):
         import retrieval.main as m
         importlib.reload(m)
@@ -73,6 +71,7 @@ def test_extract_speaker(main_mod, title, expected):
 
 def _chunk(video_id: str, start: int, text: str = None) -> dict:
     return {"metadata": {
+        "source_type": "youtube_video",
         "video_id": video_id,
         "start_seconds": start,
         "text_content": text or f"text@{start}",
@@ -118,10 +117,12 @@ def test_merge_three_same_video(main_mod):
 
 
 def test_merge_preserves_first_chapter(main_mod):
-    c1 = {"metadata": {"video_id": "v", "start_seconds": 0, "text_content": "a",
-                        "chapter": "Intro", "deep_link": "https://youtu.be/v?t=0"}}
-    c2 = {"metadata": {"video_id": "v", "start_seconds": 10, "text_content": "b",
-                        "chapter": "Main", "deep_link": "https://youtu.be/v?t=10"}}
+    c1 = {"metadata": {"source_type": "youtube_video", "video_id": "v", "start_seconds": 0,
+                        "text_content": "a", "chapter": "Intro",
+                        "deep_link": "https://youtu.be/v?t=0"}}
+    c2 = {"metadata": {"source_type": "youtube_video", "video_id": "v", "start_seconds": 10,
+                        "text_content": "b", "chapter": "Main",
+                        "deep_link": "https://youtu.be/v?t=10"}}
     result = main_mod._merge_adjacent_chunks([c1, c2])
     assert result[0]["metadata"]["chapter"] == "Intro"
     assert result[0]["metadata"]["deep_link"] == "https://youtu.be/v?t=0"
@@ -134,6 +135,23 @@ def test_merge_mixed(main_mod):
         _chunk("vid2", 0),    # separate video
     ]
     result = main_mod._merge_adjacent_chunks(chunks)
+    assert len(result) == 2
+
+
+def test_merge_article_chunks_not_merged(main_mod):
+    """Article chunks (no video_id) from the same source should not merge."""
+    art1 = {"metadata": {
+        "source_type": "article", "article_id": "abc", "start_seconds": None,
+        "text_content": "intro text", "chapter": "Intro",
+        "deep_link": "https://example.com/post#intro",
+    }}
+    art2 = {"metadata": {
+        "source_type": "article", "article_id": "abc", "start_seconds": None,
+        "text_content": "body text", "chapter": "Body",
+        "deep_link": "https://example.com/post#body",
+    }}
+    result = main_mod._merge_adjacent_chunks([art1, art2])
+    # Article chunks should NOT merge (no video_id)
     assert len(result) == 2
 
 

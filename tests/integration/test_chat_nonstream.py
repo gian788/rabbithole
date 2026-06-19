@@ -6,9 +6,9 @@ KNOWN_TOPICS = {"consciousness", "biohacking", "spirituality", "alternative_hist
 
 
 def _setup_matches(app_client, matches=FAKE_MATCHES, video_meta=FAKE_VIDEO_META):
-    """Configure mock index and DB to return the provided matches and video metadata."""
-    client, mock_db, mock_index, mock_gateway, main_mod = app_client
-    mock_index.query.return_value = {"matches": matches}
+    """Configure mock store and DB to return the provided matches and video metadata."""
+    client, mock_db, mock_store, mock_gateway, main_mod = app_client
+    mock_store.query.return_value = matches
 
     # Patch _fetch_video_meta to return our fake lookup
     main_mod._fetch_video_meta = MagicMock(return_value=video_meta)
@@ -36,8 +36,8 @@ def test_empty_query_returns_400(app_client):
 
 
 def test_no_matches_returns_graceful_message(app_client):
-    client, mock_db, mock_index, mock_gateway, main_mod = app_client
-    mock_index.query.return_value = {"matches": []}
+    client, mock_db, mock_store, mock_gateway, main_mod = app_client
+    mock_store.query.return_value = []
 
     ctx = MagicMock()
     cur = MagicMock()
@@ -95,6 +95,7 @@ def test_max_two_clips_per_source(app_client):
     # Three matches from the same video — clips should be capped at 2
     three_same = [
         {"metadata": {
+            "source_type": "youtube_video",
             "video_id": "vid1", "chapter": f"Ch{i}", "start_seconds": i * 30,
             "deep_link": f"https://youtu.be/vid1?t={i*30}",
             "text_content": f"content chunk {i}", "topics": ["consciousness"],

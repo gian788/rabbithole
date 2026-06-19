@@ -2,7 +2,10 @@
 
 ## Responsibility
 
-`ingestion/fetch_lambda.py` — polls YouTube for new videos from known channels and queues them for processing.
+Two parallel fetchers run on the same EventBridge schedule:
+
+- `ingestion/fetch_lambda.py` — polls YouTube for new videos from known channels
+- `ingestion/article_fetch_lambda.py` — polls RSS feeds for new articles from registered websites
 
 ---
 
@@ -125,3 +128,60 @@ Failed videos are retried up to 3× by SQS before landing in the DLQ. Failures d
 | YouTube 403 (quota exceeded) | Logs warning, stops processing remaining channels for this run |
 | DB connection error | Fatal — re-raises, Lambda execution fails, EventBridge records it in CloudWatch |
 | New videos = 0 | Silent success — `last_checked_at` still updated |
+
+---
+
+## Article Fetching (`article_fetch_lambda.py`)
+
+Mirrors `fetch_lambda.py` with RSS feeds replacing the YouTube API:
+
+```
+1. Query DB for active websites
+   SELECT * FROM websites WHERE is_active = TRUE
+
+2. For each website → parse RSS feed
+   feedparser.parse(rss_url) → list of {url, title}
+
+3. Filter already-known URLs
+   SELECT url FROM articles WHERE url = ANY(%(urls)s)
+
+4. Respect max_articles cap
+   SELECT COUNT(*) FROM articles WHERE website_id = %s AND status = 'completed'
+   new_count = min(new_count, max_articles - completed_count)
+
+5. Insert new article rows (status = 'discovered')
+   INSERT INTO articles (website_id, url, title, status)
+   ON CONFLICT (url) DO NOTHING
+
+6. Dispatch to ARTICLE_SQS_QUEUE_URL in batches of 10
+   Message body: {"article_id": "uuid", "url": "...", "website_id": "..."}
+
+7. Update websites.last_checked_at
+```
+
+### Article State Machine
+
+```
+     article_fetch_lambda
+              │
+              ▼
+        [ discovered ]
+              │
+   SQS → article_worker
+              │
+        [ processing ]
+       /              \
+(success)            (error)
+      │                  │
+[ completed ]        [ failed ]
+                    error_message stored
+```
+
+### `websites` Table Fields
+
+| Field | Purpose |
+|---|---|
+| `rss_url` | RSS/Atom feed URL; `NULL` if website has no feed |
+| `articles_to_fetch` | Max new articles per poll run (default 10) |
+| `max_articles` | Hard cap on total indexed articles per website (default 100) |
+| `default_topic_id` | FK → `topics` — hint for Claude Haiku classification |

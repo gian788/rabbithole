@@ -11,8 +11,8 @@ from .conftest import FAKE_MATCHES, FAKE_VIDEO_META
 
 
 def _setup(app_client, matches=FAKE_MATCHES, video_meta=FAKE_VIDEO_META):
-    client, mock_db, mock_index, mock_gateway, main_mod = app_client
-    mock_index.query.return_value = {"matches": matches}
+    client, mock_db, mock_store, mock_gateway, main_mod = app_client
+    mock_store.query.return_value = matches
     main_mod._fetch_video_meta = MagicMock(return_value=video_meta)
     main_mod._reranker.predict = MagicMock(return_value=[1.0] * len(matches))
 
@@ -82,8 +82,8 @@ def test_stream_done_answer_matches_tokens(app_client):
 
 
 def test_stream_no_matches_single_done_event(app_client):
-    client, mock_db, mock_index, mock_gateway, main_mod = app_client
-    mock_index.query.return_value = {"matches": []}
+    client, mock_db, mock_store, mock_gateway, main_mod = app_client
+    mock_store.query.return_value = []
 
     ctx = MagicMock()
     cur = MagicMock()

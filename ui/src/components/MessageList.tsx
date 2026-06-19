@@ -60,7 +60,7 @@ export function MessageList({ messages }: Props) {
             {!msg.streaming && msg.sources && msg.sources.length > 0 && (
               <div className="space-y-1.5">
                 {msg.sources.map((src) => (
-                  <SourceCard key={src.video_id} source={src} />
+                  <SourceCard key={src.video_id ?? src.article_id} source={src} />
                 ))}
               </div>
             )}

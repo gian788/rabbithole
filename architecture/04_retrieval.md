@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-`retrieval/main.py` — given a natural language query, finds the most relevant transcript chunks across all indexed videos and returns a synthesized answer with timestamped citations.
+`retrieval/main.py` — given a natural language query, finds the most relevant chunks across all indexed content (YouTube videos and web articles) and returns a synthesized answer with deep-link citations.
 
 ---
 
@@ -180,3 +180,48 @@ VALUES (%(query)s, %(topic)s, %(video_ids)s, %(cost)s)
 
 For keyword-heavy queries (specific names, places, compounds), try `alpha = 0.5`.
 For broad conceptual queries ("what is consciousness"), `alpha = 0.8` works better.
+
+---
+
+## Polymorphic Sources
+
+The retrieval layer handles both YouTube chunks and article chunks returned by a single `store.query()` call. Source type is determined by `metadata.get("source_type", "youtube_video")` — old vectors without this field default to YouTube.
+
+**`_merge_adjacent_chunks`** groups nearby chunks from the same source before building citations. Merging only applies to YouTube chunks (requires `video_id` + `start_seconds`); article chunks are never merged.
+
+**`_format_source_block`** branches on `source_type` to build the LLM context string:
+
+- YouTube: `[Chapter: {chapter} | {deep_link}]\n{text}` — includes timestamp
+- Article: `[Section: {chapter} | {deep_link}]\n{text}` — includes anchor URL
+
+**`Source` response model** carries optional fields per type:
+
+```python
+class Source(BaseModel):
+    source_type: str = "youtube_video"
+    title:       str
+    clips:       list[Clip]
+    # YouTube-only
+    video_id:    Optional[str] = None
+    channel:     Optional[str] = None
+    speaker:     Optional[str] = None
+    # Article-only
+    article_id:  Optional[str] = None
+    author:      Optional[str] = None
+    website:     Optional[str] = None
+
+class Clip(BaseModel):
+    chapter:       str
+    url:           str
+    start_seconds: Optional[int] = None  # None for articles
+```
+
+Article metadata is fetched from DB via `_fetch_article_meta(db, article_ids)`:
+
+```sql
+SELECT a.id, a.title, a.author, w.name AS website_name
+FROM articles a JOIN websites w ON w.id = a.website_id
+WHERE a.id = ANY(%s)
+```
+
+Both `video_ids` and `article_ids` are logged to `rag_queries` for cost attribution.

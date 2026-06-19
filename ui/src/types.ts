@@ -1,15 +1,23 @@
 export interface Clip {
   chapter: string
   url: string
-  start_seconds: number
+  start_seconds?: number  // undefined for article sections
 }
 
+export type SourceType = 'youtube_video' | 'article'
+
 export interface Source {
-  video_id: string
+  source_type: SourceType
   title: string
-  channel: string
-  speaker: string
   clips: Clip[]
+  // YouTube-only
+  video_id?: string
+  channel?: string
+  speaker?: string
+  // Article-only
+  article_id?: string
+  author?: string
+  website?: string
 }
 
 export interface Message {

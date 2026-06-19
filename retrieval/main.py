@@ -25,8 +25,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
 from mangum import Mangum
-from pinecone import Pinecone
-from pinecone_text.sparse import BM25Encoder
 from pydantic import BaseModel
 from sentence_transformers import CrossEncoder
 
@@ -40,19 +38,17 @@ from core.db import (
     update_conversation,
 )
 from core.gateway import ModelGateway
+from core.vector_store import get_vector_store
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — loaded once per Lambda container lifecycle.
-# Both models are CPU-compatible and cache under SENTENCE_TRANSFORMERS_HOME.
 # ---------------------------------------------------------------------------
-_bm25     = BM25Encoder.default()
 _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 # Topic vectors: populated at startup by embedding each topic description.
 # Used for zero-latency classification via dot-product against the query vector.
 _topic_vectors: dict[str, list[float]] = {}
-_PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "")
-_WIDGET_SECRET      = os.environ.get("WIDGET_SECRET", "")
+_WIDGET_SECRET = os.environ.get("WIDGET_SECRET", "")
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +89,11 @@ def optional_current_user(authorization: Optional[str] = Header(default=None)) -
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db      = get_connection()
-    app.state.index   = Pinecone(api_key=os.environ["PINECONE_API_KEY"]).Index(
-        os.environ["PINECONE_INDEX_NAME"]
-    )
+    app.state.store   = get_vector_store()
     app.state.gateway = ModelGateway(db_conn=app.state.db)
 
     # Pre-embed topic descriptions for fast query-time classification
+    from core.db import get_topic_names
     import psycopg2.extras
     with app.state.db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT name, description FROM topics")
@@ -162,15 +157,21 @@ class ChatRequest(BaseModel):
 class Clip(BaseModel):
     chapter:       str
     url:           str
-    start_seconds: int
+    start_seconds: Optional[int] = None   # None for article sections
 
 
 class Source(BaseModel):
-    video_id: str
-    title:    str
-    channel:  str
-    speaker:  str        # parsed from "Episode Title | Guest Name"
-    clips:    list[Clip] # max 2 per source video
+    source_type: str = "youtube_video"
+    title:       str
+    clips:       list[Clip]
+    # YouTube-only
+    video_id:    Optional[str] = None
+    channel:     Optional[str] = None
+    speaker:     Optional[str] = None
+    # Article-only
+    article_id:  Optional[str] = None
+    author:      Optional[str] = None
+    website:     Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -210,28 +211,33 @@ def _ensure_db(state: Any) -> None:
         state.gateway.db_conn = state.db
 
 
-
 def _merge_adjacent_chunks(matches: list[dict]) -> list[dict]:
     """
-    Merge consecutive chunks from the same video that are within 30 seconds of each
-    other into a single pseudo-match. The merged match inherits the first chunk's
-    metadata and concatenates text_content so the cross-encoder sees full context.
+    Merge consecutive chunks from the same source that are within 30 seconds of each
+    other into a single pseudo-match. For articles, merging is skipped (no start_seconds).
     """
     if not matches:
         return []
-    # Sort by video + start_seconds so neighbours are adjacent
-    sorted_m = sorted(
-        matches,
-        key=lambda m: (m["metadata"]["video_id"], m["metadata"].get("start_seconds", 0)),
-    )
+
+    def _sort_key(m: dict) -> tuple:
+        meta = m["metadata"]
+        source_id = meta.get("video_id") or meta.get("article_id", "")
+        return (source_id, meta.get("start_seconds") or 0)
+
+    sorted_m = sorted(matches, key=_sort_key)
     groups: list[list[dict]] = [[sorted_m[0]]]
     for m in sorted_m[1:]:
         prev = groups[-1][-1]
-        same_video = m["metadata"]["video_id"] == prev["metadata"]["video_id"]
+        prev_meta = prev["metadata"]
+        curr_meta = m["metadata"]
+        same_source = (
+            curr_meta.get("video_id") == prev_meta.get("video_id")
+            and curr_meta.get("video_id") is not None
+        )
         close_in_time = (
-            m["metadata"].get("start_seconds", 0) - prev["metadata"].get("start_seconds", 0)
+            (curr_meta.get("start_seconds") or 0) - (prev_meta.get("start_seconds") or 0)
         ) <= 30
-        if same_video and close_in_time:
+        if same_source and close_in_time:
             groups[-1].append(m)
         else:
             groups.append([m])
@@ -275,30 +281,63 @@ def _fetch_video_meta(db, video_ids: list[str]) -> dict[str, dict]:
         return {row["id"]: dict(row) for row in cur.fetchall()}
 
 
-def _format_source_block(m: dict, video_lookup: dict[str, dict]) -> str:
-    meta    = video_lookup.get(m["metadata"]["video_id"], {})
-    title   = meta.get("title", "Unknown")
-    speaker = _extract_speaker(title)
-    label   = f'"{title}"' + (f" — {speaker}" if speaker else "")
-    chapter = m["metadata"].get("chapter", "General")
-    url     = m["metadata"].get("deep_link", "")
-    text    = m["metadata"].get("text_content", "")
-    return f"[Source: {label} | Chapter: {chapter} | {url}]\n{text}"
+def _fetch_article_meta(db, article_ids: list[str]) -> dict[str, dict]:
+    if not article_ids:
+        return {}
+    with db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT a.id, a.title, a.author, w.name AS website_name
+            FROM articles a
+            LEFT JOIN websites w ON w.id = a.website_id
+            WHERE a.id = ANY(%s)
+            """,
+            (article_ids,),
+        )
+        return {row["id"]: dict(row) for row in cur.fetchall()}
+
+
+def _format_source_block(m: dict, video_lookup: dict, article_lookup: dict) -> str:
+    meta = m["metadata"]
+    source_type = meta.get("source_type", "youtube_video")
+    chapter = meta.get("chapter", "General")
+    url     = meta.get("deep_link", "")
+    text    = meta.get("text_content", "")
+
+    if source_type == "article":
+        info    = article_lookup.get(meta.get("article_id", ""), {})
+        t       = info.get("title", "Unknown")
+        label   = f'"{t}"'
+        author  = info.get("author", "")
+        website = info.get("website_name", "")
+        if author:
+            label += f" by {author}"
+        if website:
+            label += f" ({website})"
+    else:
+        info    = video_lookup.get(meta.get("video_id", ""), {})
+        t       = info.get("title", "Unknown")
+        speaker = _extract_speaker(t)
+        label   = f'"{t}"' + (f" — {speaker}" if speaker else "")
+
+    return f"[Source: {label} | Section: {chapter} | {url}]\n{text}"
 
 
 def _sse(event_type: str, data: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **data})}\n\n"
 
 
-def _log_query(db, query: str, topic: str, video_ids: list[str], cost: float) -> None:
+def _log_query(
+    db, query: str, topic: str, video_ids: list[str], article_ids: list[str], cost: float
+) -> None:
     try:
         with db.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO rag_queries (user_query, queried_topic, video_ids, retrieval_cost)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO rag_queries (user_query, queried_topic, video_ids, article_ids, retrieval_cost)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (query, topic, video_ids, cost),
+                (query, topic, video_ids, article_ids, cost),
             )
         db.commit()
     except Exception as exc:
@@ -361,7 +400,7 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
     _ensure_db(app.state)
 
     db      = app.state.db
-    index   = app.state.index
+    store   = app.state.store
     gateway = app.state.gateway
 
     # Resolve or create conversation
@@ -374,43 +413,33 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
     history = get_conversation_messages(db, conversation_id, limit=6)
 
     # Step A — embed query, classify topic via dot-product (~0ms, no extra API call)
-    _alpha     = 0.7
     embed_resp = gateway.get_embedding(query, associated_id="query_embed")
-
     predicted_topic = _nearest_topic(embed_resp.embedding_vector)
 
-    dense_vector = [v * _alpha for v in embed_resp.embedding_vector]
-    raw_sparse   = _bm25.encode_queries([query])[0]
-    sparse_vector = {
-        "indices": raw_sparse["indices"],
-        "values":  [v * (1 - _alpha) for v in raw_sparse["values"]],
-    }
-
-    # Step B — hybrid search filtered by nearest topic
-    results = index.query(
-        vector=dense_vector,
-        sparse_vector=sparse_vector,
-        top_k=20,
-        filter={"topics": {"$in": [predicted_topic]}},
-        include_metadata=True,
-        namespace=_PINECONE_NAMESPACE,
+    # Step B — hybrid/dense search filtered by nearest topic
+    matches = store.query(
+        embedding=embed_resp.embedding_vector,
+        n_results=20,
+        where={"primary_topic": predicted_topic},
+        query_text=query,
     )
-    matches = results.get("matches", [])
+
+    _no_results_msg = "I could not find relevant content for that query in the indexed sources."
 
     if not matches:
         save_message(db, conversation_id, "user", query)
-        save_message(db, conversation_id, "assistant", "I could not find relevant content for that query in the indexed videos.")
+        save_message(db, conversation_id, "assistant", _no_results_msg)
         if request.stream:
             def _empty_stream():
                 yield _sse("done", {
-                    "answer": "I could not find relevant content for that query in the indexed videos.",
+                    "answer": _no_results_msg,
                     "topic": "",
                     "sources": [],
                     "conversation_id": conversation_id,
                 })
             return StreamingResponse(_empty_stream(), media_type="text/event-stream")
         return ChatResponse(
-            answer="I could not find relevant content for that query in the indexed videos.",
+            answer=_no_results_msg,
             topic="",
             sources=[],
             conversation_id=conversation_id,
@@ -418,16 +447,18 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
 
     top5 = _rerank(query, matches, top_n=5)
 
-    # Step C — fetch video metadata first so speaker names are available for context labels
-    video_ids    = list({m["metadata"]["video_id"] for m in top5})
-    video_lookup = _fetch_video_meta(db, video_ids)
+    # Step C — fetch source metadata for context labels and response building
+    video_ids   = list({m["metadata"]["video_id"]   for m in top5 if m["metadata"].get("video_id")})
+    article_ids = list({m["metadata"]["article_id"] for m in top5 if m["metadata"].get("article_id")})
+    video_lookup   = _fetch_video_meta(db, video_ids)
+    article_lookup = _fetch_article_meta(db, article_ids)
 
     context = "\n\n---\n\n".join(
-        _format_source_block(m, video_lookup)
+        _format_source_block(m, video_lookup, article_lookup)
         for m in top5
     )
 
-    # Build prompt: prepend conversation history if present
+    # Build prompt with optional conversation history
     if history:
         history_lines = []
         for msg in history:
@@ -447,8 +478,8 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
         "explain its significance, describe how it is used in context, and include any "
         "relevant nuance from the sources. Aim for 3–5 sentences minimum; use more when "
         "the concept warrants it. "
-        "Each source is labelled with its video title and speaker name. "
-        "When citing a specific claim, attribute it inline — e.g. 'According to [Speaker]...' "
+        "Each source is labelled with its title and author/speaker name. "
+        "When citing a specific claim, attribute it inline — e.g. 'According to [Author]...' "
         "or '[Speaker] describes this as...'. Never use generic phrases like 'the text' or "
         "'the source'. "
         "Quote or closely paraphrase the most illuminating passage when it strengthens the answer. "
@@ -457,33 +488,56 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
         "Sources:\n" + context
     )
 
-    # Build grouped sources — max 2 clips per video, preserving re-rank order
+    # Build grouped sources — max 2 clips per source, preserving re-rank order
     seen: dict[str, int] = defaultdict(int)
     groups: dict[str, list] = defaultdict(list)
     for m in top5:
-        vid = m["metadata"]["video_id"]
-        if seen[vid] < 2:
-            groups[vid].append(m)
-            seen[vid] += 1
+        meta = m["metadata"]
+        source_type = meta.get("source_type", "youtube_video")
+        source_key = meta.get("video_id") if source_type == "youtube_video" else meta.get("article_id")
+        if source_key and seen[source_key] < 2:
+            groups[source_key].append(m)
+            seen[source_key] += 1
 
     sources = []
-    for vid, chunks in groups.items():
-        meta    = video_lookup.get(vid, {})
-        title   = meta.get("title", "Unknown")
-        sources.append(Source(
-            video_id = vid,
-            title    = title,
-            channel  = meta.get("channel_name", "Unknown"),
-            speaker  = _extract_speaker(title),
-            clips    = [
-                Clip(
-                    chapter       = c["metadata"].get("chapter", "General"),
-                    url           = c["metadata"]["deep_link"],
-                    start_seconds = int(c["metadata"].get("start_seconds", 0)),
-                )
-                for c in chunks
-            ],
-        ))
+    for source_key, chunks in groups.items():
+        meta = chunks[0]["metadata"]
+        source_type = meta.get("source_type", "youtube_video")
+
+        if source_type == "article":
+            info = article_lookup.get(source_key, {})
+            sources.append(Source(
+                source_type = "article",
+                title       = info.get("title", "Unknown"),
+                author      = info.get("author") or None,
+                website     = info.get("website_name") or None,
+                article_id  = source_key,
+                clips=[
+                    Clip(
+                        chapter = c["metadata"].get("chapter", "General"),
+                        url     = c["metadata"].get("deep_link", ""),
+                    )
+                    for c in chunks
+                ],
+            ))
+        else:
+            info = video_lookup.get(source_key, {})
+            title = info.get("title", "Unknown")
+            sources.append(Source(
+                source_type = "youtube_video",
+                title       = title,
+                channel     = info.get("channel_name", "Unknown"),
+                speaker     = _extract_speaker(title) or None,
+                video_id    = source_key,
+                clips=[
+                    Clip(
+                        chapter       = c["metadata"].get("chapter", "General"),
+                        url           = c["metadata"].get("deep_link", ""),
+                        start_seconds = int(c["metadata"].get("start_seconds", 0)),
+                    )
+                    for c in chunks
+                ],
+            ))
 
     sources_data = [s.model_dump() for s in sources]
 
@@ -505,7 +559,7 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
             save_message(db, conversation_id, "user", query)
             save_message(db, conversation_id, "assistant", full_answer, citations=sources_data)
             update_conversation(db, conversation_id, topic=predicted_topic)
-            _log_query(db, query, predicted_topic, video_ids, embed_resp.cost)
+            _log_query(db, query, predicted_topic, video_ids, article_ids, embed_resp.cost)
 
             yield _sse("done", {
                 "answer": full_answer,
@@ -530,7 +584,7 @@ def chat(request: ChatRequest, user_id: Optional[str] = Depends(optional_current
     update_conversation(db, conversation_id, topic=predicted_topic)
 
     total_cost = embed_resp.cost + synthesis_resp.cost
-    _log_query(db, query, predicted_topic, video_ids, total_cost)
+    _log_query(db, query, predicted_topic, video_ids, article_ids, total_cost)
 
     return ChatResponse(
         answer=synthesis_resp.text_content,

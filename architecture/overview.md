@@ -1,10 +1,25 @@
-# System Overview: YouTube Topic RAG Engine
+# System Overview: Topic RAG Engine
 
 ## Purpose
 
-A fully serverless pipeline that ingests YouTube transcripts from a curated list of channels, stores them as structured, time-stamped chunks in a vector database, and exposes a REST API for semantic question-answering with deep-link citations back to the exact video timestamp.
+A fully serverless pipeline that ingests content from curated YouTube channels and websites, stores structured chunks in a vector database, and exposes a REST API for semantic question-answering with deep-link citations back to the exact source.
 
 **Target topics:** human consciousness, alternative history (Egypt, Atlantis), biohacking, spirituality.
+
+---
+
+## Source Types
+
+The system handles two parallel source types with a symmetric ingestion model:
+
+| Concept | YouTube | Articles |
+|---|---|---|
+| Source registry | `channels` table | `websites` table |
+| Content unit | `videos` table | `articles` table |
+| Discovery lambda | `fetch_lambda.py` | `article_fetch_lambda.py` |
+| Processing worker | `worker_lambda.py` | `article_worker.py` |
+| SQS message | `{video_id, channel_id}` | `{article_id, url, website_id}` |
+| Chunk deep-link | YouTube timestamp URL | Article section anchor URL |
 
 ---
 
@@ -13,47 +28,47 @@ A fully serverless pipeline that ingests YouTube transcripts from a curated list
 ```
 [ AWS EventBridge Cron (every 6h) ]
               │
-              ▼
-  ┌─────────────────────────┐
-  │  fetch_lambda.py        │  Polls YouTube uploads playlists
-  │  (ingestion/fetch)      │  Inserts new video rows → DB
-  └───────────┬─────────────┘
-              │ send_message_batch
-              ▼
-  ┌─────────────────────────┐       ┌──────────────────┐
-  │  Amazon SQS             │──────►│  Dead-Letter Queue│
-  │  (video-process-queue)  │  3x   │  (7-day retention)│
-  └───────────┬─────────────┘       └──────────────────┘
-              │ triggers (batch)
-              ▼
-  ┌─────────────────────────┐
-  │  worker_lambda.py       │  Downloads transcript
-  │  (ingestion/worker)     │  Classifies topics (LLM)
-  │                         │  Generates chapters (LLM)
-  │                         │  Embeds chunks (OpenAI)
-  └────┬────────────────────┘
-       │                  │
-       ▼                  ▼
-  [ Pinecone ]        [ Amazon S3 ]
-  dense + sparse      structured JSON
-  vectors             transcripts/{topic}/{channel}/{video}.json
-       │
-       ▼
+    ┌─────────┴──────────┐
+    │                    │
+    ▼                    ▼
+┌──────────────┐  ┌──────────────────────┐
+│ fetch_lambda │  │ article_fetch_lambda  │
+│  YouTube API │  │  RSS/feed polling     │
+│  → videos DB │  │  → articles DB        │
+└──────┬───────┘  └──────────┬───────────┘
+       │ SQS                 │ SQS
+       ▼                     ▼
+┌──────────────┐  ┌──────────────────────┐
+│ worker_lambda│  │ article_worker        │
+│  transcript  │  │  HTML fetch+parse     │
+│  + LLM topics│  │  + LLM topics         │
+│  + embed     │  │  + embed              │
+└──────┬───────┘  └──────────┬───────────┘
+       │                     │
+       └────────┬────────────┘
+                │
+                ▼
+        [ VectorStore ]
+      Pinecone (production)
+      Chroma   (local dev)
+      dense vectors + metadata
+                │
+                ▼
   ┌─────────────────────────┐
   │  main.py (retrieval/)   │◄── [ API Gateway HTTP API ]
   │  FastAPI + Mangum        │
   │  1. Classify query topic │
-  │  2. Hybrid vector search │
+  │  2. Vector search        │
   │  3. Re-rank top-20→5     │
   │  4. Synthesize answer    │
   └─────────────────────────┘
               │
               ▼
-  { answer, citations: [{title, channel, chapter, url, start_seconds}] }
+  { answer, topic, sources: [{title, clips: [{chapter, url}]}] }
 
   ┌─────────────────────────┐
-  │  dashboard/app.py       │  Streamlit ops portal (local / EC2)
-  │  Neon PostgreSQL        │  Cost attribution, channel mgmt
+  │  dashboard/app.py       │  Streamlit ops portal
+  │  Neon PostgreSQL        │  Channels + Websites mgmt, cost attribution
   └─────────────────────────┘
 ```
 
@@ -61,11 +76,29 @@ A fully serverless pipeline that ingests YouTube transcripts from a curated list
 
 ## Data Paths
 
-### Ingest Path
-`EventBridge` → `fetch_lambda` → `SQS` → `worker_lambda` → `Pinecone` + `S3` + `Neon DB`
+### YouTube Ingest Path
+`EventBridge` → `fetch_lambda` → `SQS` → `worker_lambda` → `VectorStore` + `S3` + `Neon DB`
+
+### Article Ingest Path
+`EventBridge` → `article_fetch_lambda` → `SQS` → `article_worker` → `VectorStore` + `S3` + `Neon DB`
 
 ### Query Path
-`HTTP POST /v1/chat` → `FastAPI` → `Pinecone hybrid query` → `cross-encoder rerank` → `gpt-4o-mini synthesis` → JSON response
+`HTTP POST /v1/chat` → `FastAPI` → `VectorStore query` → `cross-encoder rerank` → `gpt-4o-mini synthesis` → JSON response
+
+---
+
+## VectorStore Abstraction
+
+`core/vector_store.py` provides a unified interface over two backends, switched via `VECTOR_STORE` env var:
+
+| Backend | `VECTOR_STORE` value | Search type | Use case |
+|---|---|---|---|
+| `PineconeStore` | `pinecone` (default) | Hybrid dense + BM25 sparse | Production |
+| `ChromaStore` | `chroma` | Dense-only | Local dev (zero cloud cost) |
+
+Both backends accept the same `where={"primary_topic": topic}` filter, translating internally:
+- Pinecone: `{"topics": {"$in": [topic]}}` — works with old and new vectors
+- Chroma: `{"primary_topic": {"$eq": topic}}` — requires scalar `primary_topic` field
 
 ---
 
@@ -73,27 +106,27 @@ A fully serverless pipeline that ingests YouTube transcripts from a curated list
 
 | Layer | Choice | Reason |
 |---|---|---|
-| Vector DB | Pinecone Serverless | Hybrid dense+sparse, free tier, `$in` array filter |
-| Embeddings | OpenAI text-embedding-3-small | $0.02/M tokens, 1536 dims, best quality/cost |
-| Sparse encoding | pinecone-text BM25Encoder | Pre-trained, no corpus fitting, exact term matching |
+| Vector DB (prod) | Pinecone Serverless | Hybrid dense+sparse, `$in` array filter, free tier |
+| Vector DB (dev) | Chroma | Zero cost, zero cloud deps, local persistence |
+| Embeddings | OpenAI text-embedding-3-small | $0.02/M tokens, 1536 dims |
+| Sparse encoding | pinecone-text BM25Encoder | Pre-trained on MS MARCO, no corpus fitting |
 | Re-ranking | cross-encoder/ms-marco-MiniLM-L-6-v2 | ~80MB, runs on Lambda, no API cost |
 | RAG synthesis | OpenAI gpt-4o-mini | $0.15/$0.60 per M tokens, fast |
-| Chapter gen + topic classification | Anthropic Claude Haiku 3.5 | Reliable JSON output, $0.80/$4.00 per M tokens |
-| State DB | Neon PostgreSQL | Serverless, free tier, scales to $0, full SQL for analytics |
-| Compute | AWS Lambda | $0 idle, auto-scales, per-invocation billing |
+| Topic classification | Anthropic Claude Haiku 3.5 | Reliable JSON output, shared by both workers |
+| State DB | Neon PostgreSQL | Serverless, free tier, full SQL for analytics |
+| Compute | AWS Lambda | $0 idle, auto-scales |
 | Queue | Amazon SQS | Long-polling (20s), DLQ after 3 failures |
-| Storage | Amazon S3 | Structured JSON lakehouse, Standard-IA pricing |
-| IaC | Terraform | Phase 2 |
+| Storage | Amazon S3 | Structured JSON lakehouse |
 
 ---
 
 ## Topic Model
 
-Topics are assigned **per video**, not per channel. A channel has an optional `default_topic` used only as a classification prompt hint. Each video is tagged with 1–N topics by Claude Haiku at ingest time based on its title and description.
+Topics are assigned **per content unit** (video or article), not per source (channel or website). Each source has an optional `default_topic` used only as a Claude Haiku classification hint. Content is tagged with 1–N topics from `core/topics.py::classify_topics()`, shared by both workers.
 
-This allows a channel covering multiple subjects (e.g. Joe Rogan: consciousness + biohacking + spirituality) to have all its videos correctly indexed.
+This allows a channel or website covering multiple subjects to have all its content correctly indexed by topic.
 
-Pinecone filter at query time: `{"topics": {"$in": ["consciousness"]}}`
+Both `primary_topic` (scalar, Chroma-compatible) and `topics` (array, Pinecone-compatible) are stored in vector metadata.
 
 ---
 
@@ -101,20 +134,19 @@ Pinecone filter at query time: `{"topics": {"$in": ["consciousness"]}}`
 
 **Idle cost: $0.00/month**
 
-All compute (Lambda, SQS, EventBridge) has no standing charge. Neon and Pinecone free tiers cover initial scale. Costs only accrue when processing or serving requests.
-
 | Operation | Cost |
 |---|---|
 | Embed 1 video (~10k tokens) | ~$0.0002 |
+| Embed 1 article (~3k tokens) | ~$0.00006 |
 | Classify topics (Claude Haiku) | ~$0.0003 |
-| Generate chapters (Claude Haiku) | ~$0.0008 |
+| Generate chapters (Claude Haiku, video only) | ~$0.0008 |
 | Answer 1 user query | ~$0.002 |
-| Store 1 video in Pinecone | Included in free tier |
+| Store content in Pinecone | Included in free tier |
 
 ---
 
 ## Phase Roadmap
 
-- **Phase 1 (current):** Static channel list, transcript ingestion, RAG API, ops dashboard
-- **Phase 2:** Terraform IaC, channel discovery automation, scheduled pruning
-- **Phase 3:** Multi-language transcript support, YouTube Shorts handling, citation UX
+- **Phase 1:** YouTube channels, transcript ingestion, RAG API, ops dashboard
+- **Phase 2 (current):** Article/website ingestion, VectorStore abstraction (Pinecone + Chroma), polymorphic sources in UI
+- **Phase 3:** Terraform IaC, channel/website discovery automation, scheduled pruning

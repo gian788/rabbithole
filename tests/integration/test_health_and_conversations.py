@@ -50,6 +50,7 @@ def test_get_messages(app_client):
         {"role": "user",      "content": "Hello",   "citations": None, "created_at": datetime(2024, 1, 1, 12, 0)},
         {"role": "assistant", "content": "Hi there", "citations": None, "created_at": datetime(2024, 1, 1, 12, 1)},
     ]
+    cur.fetchone.return_value = ("test-user-id",)  # ownership check in get_conversation_owner
     cur.fetchall.return_value = list(reversed(fake_rows))  # DB returns DESC, helper reverses
     ctx.__enter__ = MagicMock(return_value=cur)
     ctx.__exit__ = MagicMock(return_value=False)
