@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def _make_db(status="discovered", title="Ep 1 | Guest", description="0:00 Intro\n2:00 Main\n10:00 Outro"):
+def _make_db(status="discovered", title="Ep 1 | Guest", description="0:00 Intro\n2:00 Main\n10:00 Outro", channel_name="Test Channel"):
     """Return a mock DB that reports the given video status and metadata."""
     conn = MagicMock()
     ctx = MagicMock()
@@ -15,7 +15,9 @@ def _make_db(status="discovered", title="Ep 1 | Guest", description="0:00 Intro\
         call_count[0] += 1
         if call_count[0] == 1:
             return (status,) if status else None  # status check
-        return (title, description)               # metadata fetch
+        if call_count[0] == 2:
+            return (title, description)            # video metadata
+        return (channel_name,)                     # channel name (and any further calls)
 
     cur = MagicMock()
     cur.fetchone.side_effect = fetchone_side_effect
