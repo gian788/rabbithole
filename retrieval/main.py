@@ -10,6 +10,7 @@ GET  /v1/conversations/{conversation_id}/messages
 POST /v1/chat   {"query": str, "conversation_id"?: str, "session_id"?: str}
 """
 import json
+import json as _json
 import os
 import re
 import sys
@@ -49,6 +50,7 @@ _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 # Used for zero-latency classification via dot-product against the query vector.
 _topic_vectors: dict[str, list[float]] = {}
 _WIDGET_SECRET = os.environ.get("WIDGET_SECRET", "")
+ENTITY_WEIGHT = float(os.environ.get("ENTITY_WEIGHT", "0.3"))
 
 
 # ---------------------------------------------------------------------------
@@ -255,13 +257,53 @@ def _merge_adjacent_chunks(matches: list[dict]) -> list[dict]:
     return merged
 
 
+def _parse_list_meta(value) -> list:
+    """Coerce a metadata field that is either a native list (Pinecone) or a JSON string (Chroma)."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            result = _json.loads(value)
+            return result if isinstance(result, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def _entity_overlap_score(query_lower: str, meta: dict) -> float:
+    """Fraction of a chunk's entities that appear as substrings in the query."""
+    entities = _parse_list_meta(meta.get("entities"))
+    if not entities:
+        return 0.0
+    matched = sum(1 for e in entities if str(e).lower() in query_lower)
+    return matched / len(entities)
+
+
+def _people_bonus(query_lower: str, meta: dict) -> float:
+    """Return 0.15 if any of host/guests/author appears in the query, else 0.0."""
+    people: list[str] = []
+    if meta.get("host"):
+        people.append(str(meta["host"]))
+    people.extend(str(g) for g in _parse_list_meta(meta.get("guests")) if g)
+    if meta.get("author"):
+        people.append(str(meta["author"]))
+    return 0.15 if any(p.lower() in query_lower for p in people if p) else 0.0
+
+
 def _rerank(query: str, matches: list[dict], top_n: int = 5) -> list[dict]:
     if not matches:
         return []
-    merged = _merge_adjacent_chunks(matches)
-    pairs  = [(query, m["metadata"].get("text_content", "")) for m in merged]
-    scores = _reranker.predict(pairs)
-    ranked = sorted(zip(merged, scores), key=lambda x: x[1], reverse=True)
+    merged    = _merge_adjacent_chunks(matches)
+    pairs     = [(query, m["metadata"].get("text_content", "")) for m in merged]
+    ce_scores = _reranker.predict(pairs)
+    query_lower = query.lower()
+    final_scores = [
+        ce
+        + ENTITY_WEIGHT * _entity_overlap_score(query_lower, m["metadata"])
+        + _people_bonus(query_lower, m["metadata"])
+        for m, ce in zip(merged, ce_scores)
+    ]
+    ranked = sorted(zip(merged, final_scores), key=lambda x: x[1], reverse=True)
     return [m for m, _ in ranked[:top_n]]
 
 
