@@ -31,9 +31,9 @@ Both workers (`ingestion/worker_lambda.py` and `ingestion/article_worker.py`) ge
 
 Extend the existing `classify_topics` Haiku call in `core/topics.py` to also extract people from the video. The channel name is passed as additional context so Haiku can infer the host (e.g. channel "Joe Rogan Experience" → host "Joe Rogan").
 
-- **Return type change:** `list[str]` → `VideoMeta(topics: list[str], host: str | None, guest: str | None)`, defined in `core/topics.py`
-- Both `host` and `guest` are stored as scalar metadata fields on every chunk from that video
-- If a video has no identifiable guest (solo episode), `guest` is `None`
+- **Return type change:** `list[str]` → `VideoMeta(topics: list[str], host: str | None, guests: list[str])`, defined in `core/topics.py`
+- `host` is stored as a scalar field; `guests` as a list field on every chunk from that video
+- If a video has no identifiable guests (solo episode), `guests` is `[]`
 
 #### Articles — author
 
@@ -88,7 +88,7 @@ final_score = cross_encoder_score + ENTITY_WEIGHT * entity_overlap_score
 
 ### 2c — People bonus
 
-Check the query string against all three people fields (`host`, `guest`, `author`) via case-insensitive substring match. Each matched field contributes a flat `+0.15` bonus on top of the entity score (capped at `+0.15` total — matching both host and guest on the same chunk doesn't double-count). Handles queries like "what did Graham Hancock say about X" without requiring the person to appear in every chunk's entity list.
+Check the query string against all people fields (`host`, each entry in `guests`, `author`) via case-insensitive substring match. A flat `+0.15` bonus is applied if any match is found — capped at `+0.15` total per chunk regardless of how many people match. Handles queries like "what did Graham Hancock say about X" without requiring the person to appear in every chunk's entity list.
 
 ---
 
@@ -121,7 +121,7 @@ After ingesting 2–3 test videos into local Chroma, run entity-centric queries 
 | --- | --- |
 | `core/topics.py` | Extend Haiku prompt + return `VideoMeta(topics, speaker)` |
 | `core/entities.py` | New — `extract_chunk_entities` |
-| `ingestion/worker_lambda.py` | Unpack `VideoMeta`; call `extract_chunk_entities` per chunk; add `entities`, `host`, `guest` to metadata |
+| `ingestion/worker_lambda.py` | Unpack `VideoMeta`; call `extract_chunk_entities` per chunk; add `entities`, `host`, `guests` to metadata |
 | `ingestion/article_worker.py` | Call `extract_chunk_entities` per chunk; add `entities`, `author` to metadata |
 | `retrieval/main.py` | Entity overlap scoring; updated `_rerank` with combined score + people bonus |
 | `tests/unit/test_topics.py` | Updated return type tests |
