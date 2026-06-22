@@ -31,9 +31,14 @@ def _make_gateway(topics=None):
     gw.get_embedding.return_value = MagicMock(
         embedding_vector=[0.0] * 1536, cost=0.0001, input_tokens=10
     )
-    gw.get_completion.return_value = MagicMock(
+    topic_resp = MagicMock(
         text_content=json.dumps(topics or ["consciousness"]), cost=0.001
     )
+    entity_resp = MagicMock(
+        text_content='["consciousness", "awareness"]', cost=0.0001
+    )
+    # First call: classify_topics; remaining calls: extract_chunk_entities (one per chunk)
+    gw.get_completion.side_effect = [topic_resp] + [entity_resp] * 50
     return gw
 
 
@@ -158,3 +163,25 @@ def test_embed_exception_reraises_and_marks_failed(mock_save, mock_fetch, mock_s
 
     execute_calls = [str(c) for c in cur.execute.call_args_list]
     assert any("failed" in c for c in execute_calls)
+
+
+@patch("ingestion.article_worker.get_topic_names", return_value=["consciousness", "biohacking"])
+@patch("ingestion.article_worker.extract_sections", return_value=_FAKE_SECTIONS)
+@patch("ingestion.article_worker.fetch_article", return_value=_FAKE_ARTICLE)
+@patch("ingestion.article_worker._save_payload", return_value="local/path")
+def test_upserted_metadata_includes_entities_and_author(mock_save, mock_fetch, mock_sections, mock_topics):
+    conn, cur = _make_db()
+    store = MagicMock()
+    gw = _make_gateway()
+
+    from ingestion.article_worker import process_article
+    process_article("art-uuid-1", "https://example.com/post", "example.com", conn, store, gw)
+
+    store.upsert.assert_called_once()
+    call_kwargs = store.upsert.call_args.kwargs
+    metadatas = call_kwargs["metadatas"]
+    assert len(metadatas) > 0
+    first = metadatas[0]
+    assert "entities" in first
+    assert isinstance(first["entities"], list)
+    assert first["author"] == "Dr. Smith"  # from _FAKE_ARTICLE["author"]

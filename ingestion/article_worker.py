@@ -20,6 +20,7 @@ import boto3
 
 from core.article_fetcher import extract_sections, fetch_article
 from core.db import get_channel_default_topic, get_connection, get_topic_names
+from core.entities import extract_chunk_entities
 from core.gateway import ModelGateway
 from core.topics import classify_topics
 from core.vector_store import VectorStore, get_vector_store
@@ -110,6 +111,7 @@ def process_article(
             gateway=gateway,
         )
         primary_topic = article_topics[0] if article_topics else available_topics[0]
+        author = (article.get("author") or "")[:255]
 
         with db_conn.cursor() as cur:
             cur.execute(
@@ -133,6 +135,7 @@ def process_article(
 
             ids.append(f"{article_id}_{chunk['chunk_id']}")
             embeddings.append(embed.embedding_vector)
+            entities = extract_chunk_entities(chunk["text_content"], gateway)
             metadatas.append({
                 "source_type":   "article",
                 "article_id":    article_id,
@@ -142,6 +145,8 @@ def process_article(
                 "chapter":       chunk["associated_chapter"],
                 "section_slug":  chunk.get("section_slug", ""),
                 "deep_link":     chunk["deep_link"],
+                "entities":      entities,
+                "author":        author,
             })
             texts.append(chunk["text_content"])
 
