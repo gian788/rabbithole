@@ -9,7 +9,6 @@ POST /v1/conversations
 GET  /v1/conversations/{conversation_id}/messages
 POST /v1/chat   {"query": str, "conversation_id"?: str, "session_id"?: str}
 """
-import json
 import json as _json
 import os
 import re
@@ -366,7 +365,7 @@ def _format_source_block(m: dict, video_lookup: dict, article_lookup: dict) -> s
 
 
 def _sse(event_type: str, data: dict) -> str:
-    return f"data: {json.dumps({'type': event_type, **data})}\n\n"
+    return f"data: {_json.dumps({'type': event_type, **data})}\n\n"
 
 
 def _log_query(

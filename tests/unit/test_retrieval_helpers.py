@@ -179,7 +179,6 @@ def test_sse_extra_keys_present(main_mod):
     assert parsed["extra"] == 42
 
 
-import pytest
 from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------

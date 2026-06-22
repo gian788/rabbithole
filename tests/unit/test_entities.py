@@ -1,8 +1,6 @@
 """Unit tests for core/entities.py — per-chunk entity extraction."""
 from unittest.mock import MagicMock
 
-import pytest
-
 from core.entities import extract_chunk_entities
 
 
