@@ -32,7 +32,8 @@ from core.chunker import (
 )
 from core.db import get_channel_default_topic, get_connection, get_topic_names
 from core.gateway import ModelGateway
-from core.topics import classify_topics
+from core.entities import extract_chunk_entities
+from core.topics import classify_video_meta
 from core.vector_store import VectorStore, get_vector_store
 
 
@@ -104,6 +105,11 @@ def process_video(
         title       = meta[0] if meta else ""
         description = meta[1] if meta else ""
 
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT name FROM channels WHERE id = %s", (channel_id,))
+            ch_row = cur.fetchone()
+        channel_name = ch_row[0] if ch_row else ""
+
         # -- Chapter strategy -------------------------------------------------
         chapters = extract_chapters_from_description(description)
         if len(chapters) < 3:
@@ -116,20 +122,21 @@ def process_video(
             full_text = " ".join(seg["text"] for seg in srt)
             chunks = fixed_word_chunking(full_text, video_id)
 
-        # -- Topic classification ---------------------------------------------
+        # -- Topic classification + people extraction -------------------------
         available_topics = get_topic_names(db_conn)
         default_hint     = get_channel_default_topic(db_conn, channel_id) or available_topics[0]
-        # Use transcript excerpt as fallback when description is missing
         classify_text = description.strip() if description and description.strip() else (
             " ".join(seg["text"] for seg in srt[:120])
         )
-        video_topics = classify_topics(
+        video_meta = classify_video_meta(
             title=title,
+            channel_name=channel_name,
             text_excerpt=classify_text,
             available_topics=available_topics,
             default_hint=default_hint,
             gateway=gateway,
         )
+        video_topics  = video_meta.topics
         primary_topic = video_topics[0] if video_topics else available_topics[0]
 
         with db_conn.cursor() as cur:
@@ -149,6 +156,7 @@ def process_video(
             total_tokens += embed.input_tokens
             total_cost   += embed.cost
 
+            entities = extract_chunk_entities(chunk["text_content"], gateway)
             ids.append(f"{video_id}_{chunk['chunk_id']}")
             embeddings.append(embed.embedding_vector)
             metadatas.append({
@@ -160,6 +168,9 @@ def process_video(
                 "chapter":       chunk["associated_chapter"],
                 "start_seconds": chunk["start_seconds"],
                 "deep_link":     chunk["deep_link"],
+                "entities":      entities,
+                "host":          video_meta.host,
+                "guests":        video_meta.guests,
             })
             texts.append(chunk["text_content"])
 

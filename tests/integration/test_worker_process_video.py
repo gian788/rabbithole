@@ -37,14 +37,25 @@ def _fake_transcript():
     return result
 
 
-def _make_gateway(topics=None):
+def _make_gateway(topics=None, host="Test Host", guests=None):
     gw = MagicMock()
     gw.get_embedding.return_value = MagicMock(
         embedding_vector=[0.0] * 1536, cost=0.0001, input_tokens=10
     )
-    gw.get_completion.return_value = MagicMock(
-        text_content=json.dumps(topics or ["consciousness"]), cost=0.001
+    video_meta_resp = MagicMock(
+        text_content=json.dumps({
+            "topics": topics or ["consciousness"],
+            "host": host,
+            "guests": guests if guests is not None else [],
+        }),
+        cost=0.001,
     )
+    entity_resp = MagicMock(
+        text_content='["concept1", "concept2"]',
+        cost=0.0001,
+    )
+    # First call: classify_video_meta; remaining calls: extract_chunk_entities (one per chunk)
+    gw.get_completion.side_effect = [video_meta_resp] + [entity_resp] * 50
     return gw
 
 
@@ -99,15 +110,17 @@ def test_description_without_chapters_calls_llm(mock_save, mock_topic, mock_name
         {"title": "Deep",  "start_seconds": 120},
         {"title": "End",   "start_seconds": 200},
     ])
+    video_meta_json = json.dumps({"topics": ["consciousness"], "host": "Test Host", "guests": []})
+    entity_resp = MagicMock(text_content='["concept1", "concept2"]', cost=0.0001)
     gw.get_completion.side_effect = [
-        MagicMock(text_content=chapters_json, cost=0.001),  # chapter gen
-        MagicMock(text_content='["consciousness"]', cost=0.001),  # topic classify
-    ]
+        MagicMock(text_content=chapters_json, cost=0.001),         # chapter gen
+        MagicMock(text_content=video_meta_json, cost=0.001),       # video_meta classify
+    ] + [entity_resp] * 50
 
     from ingestion.worker_lambda import process_video
     process_video("vid1", "ch1", conn, None, mock_store, gw)
 
-    # gateway.get_completion called at least twice: chapter gen + topic classification
+    # gateway.get_completion called at least twice: chapter gen + video_meta classification
     assert gw.get_completion.call_count >= 2
 
 
@@ -122,10 +135,12 @@ def test_llm_returns_few_chapters_uses_fixed_chunking(mock_save, mock_topic, moc
     mock_store = MagicMock()
     gw = _make_gateway()
     # Chapter gen returns only 1 chapter → fallback to fixed_word_chunking
+    video_meta_json = json.dumps({"topics": ["consciousness"], "host": "Test Host", "guests": []})
+    entity_resp = MagicMock(text_content='["concept1", "concept2"]', cost=0.0001)
     gw.get_completion.side_effect = [
         MagicMock(text_content='[{"title":"Intro","start_seconds":0}]', cost=0.001),
-        MagicMock(text_content='["consciousness"]', cost=0.001),
-    ]
+        MagicMock(text_content=video_meta_json, cost=0.001),
+    ] + [entity_resp] * 50
 
     from ingestion.worker_lambda import process_video
 
@@ -160,7 +175,6 @@ def test_embed_exception_reraises(mock_topic, mock_names, mock_api_cls, mock_spo
     conn, cur = _make_db(description="0:00 Intro\n2:00 Main\n10:00 Outro\n20:00 End")
     mock_store = MagicMock()
     gw = _make_gateway()
-    gw.get_completion.return_value = MagicMock(text_content='["consciousness"]', cost=0.001)
     gw.get_embedding.side_effect = RuntimeError("OpenAI down")
 
     from ingestion.worker_lambda import process_video
@@ -215,3 +229,29 @@ def test_local_s3_path_writes_to_disk(tmp_path, monkeypatch):
 
     saved_files = list(tmp_path.rglob("*.json"))
     assert len(saved_files) >= 1
+
+
+@patch("ingestion.worker_lambda.fetch_sponsor_segments", return_value=[])
+@patch("ingestion.worker_lambda.YouTubeTranscriptApi")
+@patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
+@patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
+@patch("ingestion.worker_lambda._save_payload", return_value="local/path")
+def test_upserted_metadata_includes_entities_and_people(mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor):
+    conn, cur = _make_db()
+    mock_store = MagicMock()
+    gw = _make_gateway(topics=["consciousness"], host="The Host", guests=["The Guest"])
+
+    mock_api_cls.return_value.fetch.return_value = _fake_transcript()
+
+    from ingestion.worker_lambda import process_video
+    process_video("vid1", "ch1", conn, None, mock_store, gw)
+
+    mock_store.upsert.assert_called_once()
+    call_kwargs = mock_store.upsert.call_args.kwargs
+    metadatas = call_kwargs["metadatas"]
+    assert len(metadatas) > 0
+    first = metadatas[0]
+    assert "entities" in first
+    assert isinstance(first["entities"], list)
+    assert first["host"] == "The Host"
+    assert first["guests"] == ["The Guest"]
