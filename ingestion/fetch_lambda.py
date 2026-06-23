@@ -73,6 +73,7 @@ def lambda_handler(event: dict, context) -> dict:
             SELECT id, name, uploads_playlist_id, videos_to_fetch, max_videos
             FROM channels
             WHERE is_active = TRUE
+              AND is_approved = TRUE
             ORDER BY last_checked_at ASC NULLS FIRST
             """
         )

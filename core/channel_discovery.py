@@ -57,7 +57,7 @@ def _get_existing_channel_ids(db_conn, channel_ids: list[str]) -> set[str]:
 
 def _insert_candidate(
     db_conn, channel: dict, source_video_id: str, guest_name: str
-) -> None:
+) -> int:
     uploads_playlist_id = "UU" + channel["id"][2:]
     with db_conn.cursor() as cur:
         cur.execute(
@@ -79,6 +79,7 @@ def _insert_candidate(
                 channel["subscriber_count"],
             ),
         )
+        return cur.rowcount
 
 
 def discover_guest_channels(
@@ -116,8 +117,7 @@ def discover_guest_channels(
 
             candidates = _get_channel_details(new_ids, youtube_api_key)
             for channel in candidates:
-                _insert_candidate(db_conn, channel, source_video_id, name)
-                inserted += 1
+                inserted += _insert_candidate(db_conn, channel, source_video_id, name)
             db_conn.commit()
 
         except Exception as exc:

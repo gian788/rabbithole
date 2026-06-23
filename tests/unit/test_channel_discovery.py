@@ -175,6 +175,7 @@ def test_discover_inserts_new_candidate_and_commits():
 
     existing_cur = db_conn.cursor.return_value.__enter__.return_value
     existing_cur.fetchall.return_value = []  # not in DB
+    existing_cur.rowcount = 1  # simulate a successful INSERT (not skipped by ON CONFLICT)
 
     with patch("core.channel_discovery.httpx.get", side_effect=[search_resp, details_resp]):
         from core.channel_discovery import discover_guest_channels
@@ -216,6 +217,7 @@ def test_discover_processes_multiple_guests_independently():
 
     existing_cur = db_conn.cursor.return_value.__enter__.return_value
     existing_cur.fetchall.return_value = []  # nothing in DB
+    existing_cur.rowcount = 1  # simulate successful INSERT for each candidate
 
     with patch("core.channel_discovery.httpx.get", side_effect=[
         make_search_resp("UCa"), make_details_resp("UCa", "Guest A"),
