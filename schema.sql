@@ -10,16 +10,22 @@ CREATE TABLE topics (
 );
 
 CREATE TABLE channels (
-    id                  VARCHAR(50) PRIMARY KEY,  -- YouTube Channel ID (UC...)
-    name                VARCHAR(255) NOT NULL,
-    handle              VARCHAR(100),
-    uploads_playlist_id VARCHAR(50)  NOT NULL,    -- UU... (derived from UC...; 1 quota unit = 50 videos)
-    default_topic_id    INT REFERENCES topics(id) ON DELETE SET NULL,  -- classification hint only
-    videos_to_fetch     INT DEFAULT 10,
-    max_videos          INT DEFAULT 100,          -- hard cap on total indexed videos per channel
-    is_active           BOOLEAN DEFAULT TRUE,
-    last_checked_at     TIMESTAMP WITH TIME ZONE,
-    created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id                       VARCHAR(50) PRIMARY KEY,
+    name                     VARCHAR(255) NOT NULL,
+    handle                   VARCHAR(100),
+    uploads_playlist_id      VARCHAR(50)  NOT NULL,
+    default_topic_id         INT REFERENCES topics(id) ON DELETE SET NULL,
+    videos_to_fetch          INT DEFAULT 10,
+    max_videos               INT DEFAULT 100,
+    is_active                BOOLEAN DEFAULT TRUE,
+    is_approved              BOOLEAN DEFAULT FALSE,
+    is_rejected              BOOLEAN DEFAULT FALSE,
+    source                   VARCHAR(20) DEFAULT 'manual',
+    discovered_from_video_id VARCHAR(50),
+    discovered_guest_name    VARCHAR(255),
+    subscriber_count         BIGINT,
+    last_checked_at          TIMESTAMP WITH TIME ZONE,
+    created_at               TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE TABLE videos (
@@ -103,14 +109,16 @@ CREATE INDEX idx_telemetry_model ON model_telemetry(model);
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE websites (
-    id                VARCHAR(100) PRIMARY KEY,  -- e.g. "hubermanlab.com"
+    id                VARCHAR(100) PRIMARY KEY,
     name              VARCHAR(255) NOT NULL,
     base_url          TEXT NOT NULL,
-    rss_url           TEXT,                      -- NULL → fall back to sitemap.xml
+    rss_url           TEXT,
     default_topic_id  INT REFERENCES topics(id) ON DELETE SET NULL,
-    articles_to_fetch INT DEFAULT 10,            -- max new articles per poll run
-    max_articles      INT DEFAULT 100,           -- hard cap on total indexed articles
+    articles_to_fetch INT DEFAULT 10,
+    max_articles      INT DEFAULT 100,
     is_active         BOOLEAN DEFAULT TRUE,
+    is_approved       BOOLEAN DEFAULT FALSE,
+    source            VARCHAR(20) DEFAULT 'manual',
     last_checked_at   TIMESTAMP WITH TIME ZONE,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
