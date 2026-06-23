@@ -32,6 +32,7 @@ from core.chunker import (
 )
 from core.db import get_channel_default_topic, get_connection, get_topic_names
 from core.gateway import ModelGateway
+from core.channel_discovery import discover_guest_channels
 from core.entities import extract_chunk_entities
 from core.topics import classify_video_meta
 from core.vector_store import VectorStore, get_vector_store
@@ -138,6 +139,16 @@ def process_video(
         )
         video_topics  = video_meta.topics
         primary_topic = video_topics[0] if video_topics else available_topics[0]
+
+        # -- Guest channel discovery ------------------------------------------
+        api_key = os.environ.get("YOUTUBE_API_KEY", "")
+        if api_key and video_meta.guests:
+            discover_guest_channels(
+                guest_names=video_meta.guests,
+                source_video_id=video_id,
+                db_conn=db_conn,
+                youtube_api_key=api_key,
+            )
 
         with db_conn.cursor() as cur:
             cur.execute("UPDATE videos SET topics = %s WHERE id = %s", (video_topics, video_id))
