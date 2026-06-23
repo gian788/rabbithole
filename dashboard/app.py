@@ -113,8 +113,8 @@ with st.sidebar:
                         """
                         INSERT INTO channels
                             (id, name, uploads_playlist_id, default_topic_id,
-                             videos_to_fetch, max_videos)
-                        SELECT %s, %s, %s, t.id, %s, %s
+                             videos_to_fetch, max_videos, is_approved, source)
+                        SELECT %s, %s, %s, t.id, %s, %s, TRUE, 'manual'
                         FROM topics t WHERE t.name = %s
                         ON CONFLICT (id) DO NOTHING
                         """,
@@ -195,6 +195,62 @@ tab_channels, tab_websites, tab_spend, tab_failures = st.tabs(
 
 # ── Channels ──────────────────────────────────────────────────────────────
 with tab_channels:
+    # ── Pending Channel Approvals ──────────────────────────────────────────
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT c.id, c.name, c.discovered_guest_name,
+                   c.discovered_from_video_id, c.subscriber_count,
+                   v.title AS source_video_title
+            FROM channels c
+            LEFT JOIN videos v ON v.id = c.discovered_from_video_id
+            WHERE c.is_approved = FALSE AND c.is_rejected = FALSE
+            ORDER BY c.created_at DESC
+            """
+        )
+        pending = cur.fetchall()
+
+    if pending:
+        st.subheader(f"Pending Channel Approvals ({len(pending)})")
+        hdr = st.columns([3, 2, 3, 2, 1, 1])
+        for col, label in zip(hdr, ["Channel", "Guest Name", "Source Video", "Subscribers", "", ""]):
+            col.markdown(f"**{label}**")
+        st.divider()
+
+        for row in pending:
+            channel_url = f"https://www.youtube.com/channel/{row['id']}"
+            cols = st.columns([3, 2, 3, 2, 1, 1])
+            cols[0].markdown(f"[{row['name']}]({channel_url})")
+            cols[1].write(row["discovered_guest_name"] or "—")
+            if row["discovered_from_video_id"]:
+                video_url = f"https://youtu.be/{row['discovered_from_video_id']}"
+                label = row["source_video_title"] or row["discovered_from_video_id"]
+                cols[2].markdown(f"[{label}]({video_url})")
+            else:
+                cols[2].write("—")
+            subs = row["subscriber_count"]
+            cols[3].write(f"{subs:,}" if subs else "—")
+
+            if cols[4].button("Approve", key=f"approve_{row['id']}"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE channels SET is_approved = TRUE, is_active = TRUE WHERE id = %s",
+                        (row["id"],),
+                    )
+                conn.commit()
+                st.rerun()
+
+            if cols[5].button("Reject", key=f"reject_{row['id']}"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE channels SET is_rejected = TRUE WHERE id = %s",
+                        (row["id"],),
+                    )
+                conn.commit()
+                st.rerun()
+
+        st.divider()
+
     st.subheader("Channel Value Attribution")
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -215,6 +271,7 @@ with tab_channels:
             LEFT JOIN topics t      ON t.id = c.default_topic_id
             LEFT JOIN videos v      ON v.channel_id = c.id
             LEFT JOIN rag_queries q ON c.id = ANY(q.video_ids)
+            WHERE c.is_approved = TRUE
             GROUP BY c.id, c.name, t.name, c.is_active
             ORDER BY total_cost DESC
             """
