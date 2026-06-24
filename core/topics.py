@@ -79,7 +79,9 @@ def classify_video_meta(
         f'"topics" (array of strings from this list only: {available_topics}; '
         f"include ALL relevant ones; hint: {hint}), "
         '"host" (string or null — the channel\'s regular host inferred from the channel name), '
-        '"guests" (array of strings — guest names from the title; empty array if none). '
+        '"guests" (array of strings — names of interview guests; in podcast/interview titles, '
+        'names after "|" or "with" or "ft." are guests, not the host; also check the description excerpt; '
+        'empty array only if no guest is present). '
         'Example: {"topics": ["consciousness"], "host": "Joe Rogan", "guests": ["Graham Hancock"]}. '
         "Output nothing else."
     )

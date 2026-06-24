@@ -37,6 +37,45 @@ except ImportError:
     pass  # dotenv is a dev dependency; skip if somehow missing
 
 
+def _ensure_video_in_db(db_conn, video_id: str, channel_id: str) -> None:
+    """Insert video metadata from YouTube API if the video isn't already in the DB.
+
+    When using --video directly (bypassing fetch_lambda), the video row may not
+    exist yet, leaving title/description empty and breaking guest extraction.
+    """
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM videos WHERE id = %s", (video_id,))
+        if cur.fetchone():
+            return
+
+    api_key = os.environ.get("YOUTUBE_API_KEY", "")
+    if not api_key:
+        print(f"[run_local] WARNING: {video_id} not in DB and no YOUTUBE_API_KEY — title/description will be empty")
+        return
+
+    import httpx
+    resp = httpx.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "snippet", "id": video_id, "key": api_key},
+        timeout=10,
+    )
+    items = resp.json().get("items", [])
+    if not items:
+        print(f"[run_local] WARNING: YouTube API returned no metadata for {video_id}")
+        return
+
+    snippet = items[0]["snippet"]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO videos (id, channel_id, title, description, status)
+               VALUES (%s, %s, %s, %s, 'discovered')
+               ON CONFLICT (id) DO NOTHING""",
+            (video_id, channel_id, snippet.get("title", ""), snippet.get("description", "")),
+        )
+    db_conn.commit()
+    print(f"[run_local] fetched and inserted video: {snippet.get('title', '')[:80]}")
+
+
 def run_fetch() -> None:
     from ingestion.fetch_lambda import lambda_handler
     result = lambda_handler({}, None)
@@ -52,6 +91,7 @@ def run_process(video_id: str, channel_id: str) -> None:
     from ingestion.worker_lambda import process_video
 
     db_conn = get_connection()
+    _ensure_video_in_db(db_conn, video_id, channel_id)
     s3_client = boto3.client(
         "s3", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     )
