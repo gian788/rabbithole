@@ -5,6 +5,7 @@ Streamlit developer ops portal.
 Run:  streamlit run dashboard/app.py
 """
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -34,6 +35,46 @@ def get_sqs():
     return boto3.client(
         "sqs", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     )
+
+
+def _resolve_channel_url(raw: str, api_key: str = "") -> tuple[str | None, str | None]:
+    """Return (channel_id, channel_name) from a YouTube URL, @handle, or bare UC... ID.
+
+    Tries a free regex extraction first; falls back to a cheap channels.list API call
+    (1 unit) for handle-style inputs when an API key is available.
+    channel_name is None when it can't be determined without an API call.
+    """
+    raw = raw.strip()
+
+    # Bare UC... channel ID
+    if re.match(r"^UC[\w-]{20,}$", raw):
+        return raw, None
+
+    # youtube.com/channel/UCxxxx
+    m = re.search(r"youtube\.com/channel/(UC[\w-]{20,})", raw)
+    if m:
+        return m.group(1), None
+
+    # @handle or youtube.com/@handle or youtube.com/c/handle
+    handle_m = re.search(r"(?:youtube\.com/(?:@|c/)|\A@?)([\w.]+)\Z", raw, re.IGNORECASE)
+    handle = handle_m.group(1).lstrip("@") if handle_m else None
+
+    if handle and api_key:
+        import httpx
+        try:
+            resp = httpx.get(
+                "https://www.googleapis.com/youtube/v3/channels",
+                params={"part": "snippet", "forHandle": f"@{handle}", "key": api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            if items:
+                return items[0]["id"], items[0]["snippet"]["title"]
+        except Exception:
+            pass
+
+    return None, None
 
 
 def queue_depth(sqs, url: str) -> str:
@@ -298,19 +339,28 @@ with tab_channels:
         guest_options = [row["guest_name"] for row in queue_rows]
         with st.form("manual_link_guest"):
             selected_guest = st.selectbox("Guest", guest_options)
-            manual_channel_id = st.text_input("Channel ID (UC...)")
-            manual_channel_name = st.text_input("Channel Name")
+            channel_url_input = st.text_input(
+                "YouTube URL or @handle",
+                placeholder="https://www.youtube.com/@DariusJWright  or  @DariusJWright",
+            )
+            manual_channel_name = st.text_input(
+                "Channel Name (auto-detected for @handles with API key)",
+            )
             submitted_link = st.form_submit_button("Link Channel")
 
         if submitted_link:
-            if not manual_channel_id.startswith("UC"):
-                st.error("Channel ID must start with 'UC'")
-            elif not manual_channel_name.strip():
-                st.error("Channel name is required")
+            disc_api_key = os.environ.get("YOUTUBE_DISCOVERY_API_KEY") or os.environ.get("YOUTUBE_API_KEY", "")
+            channel_id, detected_name = _resolve_channel_url(channel_url_input, api_key=disc_api_key)
+            channel_name = manual_channel_name.strip() or detected_name or ""
+
+            if not channel_id:
+                st.error("Could not extract a channel ID. Try a URL like https://www.youtube.com/channel/UC… or @handle")
+            elif not channel_name:
+                st.error("Channel name could not be auto-detected — enter it manually")
             else:
                 matched = next((r for r in queue_rows if r["guest_name"] == selected_guest), None)
                 if matched:
-                    uploads_playlist_id = "UU" + manual_channel_id[2:]
+                    uploads_playlist_id = "UU" + channel_id[2:]
                     try:
                         with conn.cursor() as cur:
                             cur.execute(
@@ -323,8 +373,8 @@ with tab_channels:
                                 ON CONFLICT (id) DO NOTHING
                                 """,
                                 (
-                                    manual_channel_id,
-                                    manual_channel_name.strip(),
+                                    channel_id,
+                                    channel_name,
                                     uploads_playlist_id,
                                     matched["source_video_id"],
                                     selected_guest,
@@ -335,10 +385,10 @@ with tab_channels:
                                    SET status = 'discovered', linked_channel_id = %s,
                                        last_attempted_at = NOW()
                                    WHERE id = %s""",
-                                (manual_channel_id, matched["id"]),
+                                (channel_id, matched["id"]),
                             )
                         conn.commit()
-                        st.success(f"Linked '{selected_guest}' → {manual_channel_name}. Check Pending Approvals.")
+                        st.success(f"Linked '{selected_guest}' → {channel_name}. Check Pending Approvals.")
                         st.rerun()
                     except Exception as exc:
                         conn.rollback()
