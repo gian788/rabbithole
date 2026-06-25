@@ -37,44 +37,53 @@ def get_sqs():
     )
 
 
-def _resolve_channel_url(raw: str, api_key: str = "") -> tuple[str | None, str | None]:
-    """Return (channel_id, channel_name) from a YouTube URL, @handle, or bare UC... ID.
+def _resolve_channel_url(raw: str, api_key: str = "") -> tuple[str | None, str | None, str | None]:
+    """Return (channel_id, channel_name, error) from a YouTube URL, @handle, or bare UC... ID.
 
     Tries a free regex extraction first; falls back to a cheap channels.list API call
     (1 unit) for handle-style inputs when an API key is available.
-    channel_name is None when it can't be determined without an API call.
+    Returns (None, None, error_message) on any failure so callers can show specific errors.
     """
     raw = raw.strip()
+    if not raw:
+        return None, None, "Enter a YouTube URL or @handle"
 
     # Bare UC... channel ID
     if re.match(r"^UC[\w-]{20,}$", raw):
-        return raw, None
+        return raw, None, None
 
     # youtube.com/channel/UCxxxx
     m = re.search(r"youtube\.com/channel/(UC[\w-]{20,})", raw)
     if m:
-        return m.group(1), None
+        return m.group(1), None, None
 
-    # @handle or youtube.com/@handle or youtube.com/c/handle
-    handle_m = re.search(r"(?:youtube\.com/(?:@|c/)|\A@?)([\w.]+)\Z", raw, re.IGNORECASE)
+    # Extract handle from @handle, youtube.com/@handle, or youtube.com/c/handle
+    handle_m = re.search(r"(?:youtube\.com/(?:@|c/)|^@?)([\w.-]+)/?$", raw, re.IGNORECASE)
     handle = handle_m.group(1).lstrip("@") if handle_m else None
 
-    if handle and api_key:
-        import httpx
-        try:
-            resp = httpx.get(
-                "https://www.googleapis.com/youtube/v3/channels",
-                params={"part": "snippet", "forHandle": f"@{handle}", "key": api_key},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            items = resp.json().get("items", [])
-            if items:
-                return items[0]["id"], items[0]["snippet"]["title"]
-        except Exception:
-            pass
+    if not handle:
+        return None, None, "Could not parse URL — try https://www.youtube.com/channel/UCxxxx or @handle"
 
-    return None, None
+    if not api_key:
+        return None, None, f"Handle @{handle} detected but no YouTube API key configured — paste the /channel/UCxxxx URL instead or enter the channel ID manually below"
+
+    import httpx
+    try:
+        resp = httpx.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={"part": "snippet", "forHandle": f"@{handle}", "key": api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if items:
+            return items[0]["id"], items[0]["snippet"]["title"], None
+        return None, None, f"No YouTube channel found for @{handle}"
+    except Exception as exc:
+        msg = str(exc)
+        if "quotaExceeded" in msg or "403" in msg:
+            return None, None, f"YouTube API quota exceeded — enter the channel ID (UC…) manually below"
+        return None, None, f"YouTube API error for @{handle}: {exc}"
 
 
 def queue_depth(sqs, url: str) -> str:
@@ -343,20 +352,27 @@ with tab_channels:
                 "YouTube URL or @handle",
                 placeholder="https://www.youtube.com/@DariusJWright  or  @DariusJWright",
             )
-            manual_channel_name = st.text_input(
-                "Channel Name (auto-detected for @handles with API key)",
+            manual_channel_id_override = st.text_input(
+                "Channel ID (UC…) — required if URL lookup fails",
+                placeholder="UCxxxxxxxxxxxxxxxxxxxxxxxxx",
             )
+            manual_channel_name = st.text_input("Channel Name")
             submitted_link = st.form_submit_button("Link Channel")
 
         if submitted_link:
             disc_api_key = os.environ.get("YOUTUBE_DISCOVERY_API_KEY") or os.environ.get("YOUTUBE_API_KEY", "")
-            channel_id, detected_name = _resolve_channel_url(channel_url_input, api_key=disc_api_key)
+            channel_id, detected_name, resolve_err = _resolve_channel_url(channel_url_input, api_key=disc_api_key)
+
+            # Manual ID override takes precedence when URL lookup failed
+            if not channel_id and manual_channel_id_override.strip().startswith("UC"):
+                channel_id = manual_channel_id_override.strip()
+
             channel_name = manual_channel_name.strip() or detected_name or ""
 
             if not channel_id:
-                st.error("Could not extract a channel ID. Try a URL like https://www.youtube.com/channel/UC… or @handle")
+                st.error(resolve_err or "Could not extract a channel ID — enter it manually in the Channel ID field")
             elif not channel_name:
-                st.error("Channel name could not be auto-detected — enter it manually")
+                st.error("Channel name is required")
             else:
                 matched = next((r for r in queue_rows if r["guest_name"] == selected_guest), None)
                 if matched:
