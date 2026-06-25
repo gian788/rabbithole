@@ -251,6 +251,101 @@ with tab_channels:
 
         st.divider()
 
+    # ── Guest Discovery Queue ──────────────────────────────────────────────
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.guest_name, p.source_video_id, p.status,
+                   p.attempts, p.created_at, v.title AS source_video_title
+            FROM pending_guest_discovery p
+            LEFT JOIN videos v ON v.id = p.source_video_id
+            WHERE p.status IN ('pending', 'not_found')
+            ORDER BY p.created_at DESC
+            LIMIT 50
+            """
+        )
+        queue_rows = cur.fetchall()
+
+    if queue_rows:
+        st.subheader(f"Guest Discovery Queue ({len(queue_rows)})")
+        hdr = st.columns([3, 4, 2, 1, 1])
+        for col, label in zip(hdr, ["Guest Name", "Source Video", "Status", "Attempts", ""]):
+            col.markdown(f"**{label}**")
+        st.divider()
+
+        for row in queue_rows:
+            cols = st.columns([3, 4, 2, 1, 1])
+            cols[0].write(row["guest_name"])
+            if row["source_video_id"]:
+                video_url = f"https://youtu.be/{row['source_video_id']}"
+                label = row["source_video_title"] or row["source_video_id"]
+                cols[1].markdown(f"[{label}]({video_url})")
+            else:
+                cols[1].write("—")
+            cols[2].write(row["status"])
+            cols[3].write(row["attempts"])
+            if cols[4].button("Skip", key=f"skip_guest_{row['id']}"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE pending_guest_discovery SET status = 'skipped' WHERE id = %s",
+                        (row["id"],),
+                    )
+                conn.commit()
+                st.rerun()
+
+        # Manual channel link form
+        st.markdown("**Manually link a guest to a channel:**")
+        guest_options = [row["guest_name"] for row in queue_rows]
+        with st.form("manual_link_guest"):
+            selected_guest = st.selectbox("Guest", guest_options)
+            manual_channel_id = st.text_input("Channel ID (UC...)")
+            manual_channel_name = st.text_input("Channel Name")
+            submitted_link = st.form_submit_button("Link Channel")
+
+        if submitted_link:
+            if not manual_channel_id.startswith("UC"):
+                st.error("Channel ID must start with 'UC'")
+            elif not manual_channel_name.strip():
+                st.error("Channel name is required")
+            else:
+                matched = next((r for r in queue_rows if r["guest_name"] == selected_guest), None)
+                if matched:
+                    uploads_playlist_id = "UU" + manual_channel_id[2:]
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO channels
+                                    (id, name, uploads_playlist_id,
+                                     is_active, is_approved, is_rejected,
+                                     source, discovered_from_video_id, discovered_guest_name)
+                                VALUES (%s, %s, %s, FALSE, FALSE, FALSE, 'discovered', %s, %s)
+                                ON CONFLICT (id) DO NOTHING
+                                """,
+                                (
+                                    manual_channel_id,
+                                    manual_channel_name.strip(),
+                                    uploads_playlist_id,
+                                    matched["source_video_id"],
+                                    selected_guest,
+                                ),
+                            )
+                            cur.execute(
+                                """UPDATE pending_guest_discovery
+                                   SET status = 'discovered', linked_channel_id = %s,
+                                       last_attempted_at = NOW()
+                                   WHERE id = %s""",
+                                (manual_channel_id, matched["id"]),
+                            )
+                        conn.commit()
+                        st.success(f"Linked '{selected_guest}' → {manual_channel_name}. Check Pending Approvals.")
+                        st.rerun()
+                    except Exception as exc:
+                        conn.rollback()
+                        st.error(f"DB error: {exc}")
+
+        st.divider()
+
     st.subheader("Channel Value Attribution")
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

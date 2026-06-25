@@ -147,6 +147,20 @@ CREATE INDEX idx_articles_topics  ON articles USING GIN(topics);
 
 ALTER TABLE rag_queries ADD COLUMN article_ids TEXT[] DEFAULT '{}';
 
+-- Guest discovery queue: populated by video worker, drained by discovery_worker
+CREATE TABLE IF NOT EXISTS pending_guest_discovery (
+    id                BIGSERIAL PRIMARY KEY,
+    guest_name        VARCHAR(255) NOT NULL,
+    source_video_id   VARCHAR(50)  NOT NULL,
+    source_channel_id VARCHAR(50),
+    status            VARCHAR(20)  DEFAULT 'pending',  -- pending|discovered|not_found|skipped
+    attempts          INT          DEFAULT 0,
+    last_attempted_at TIMESTAMP WITH TIME ZONE,
+    linked_channel_id VARCHAR(50),
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (guest_name, source_video_id)
+);
+
 -- Seed topics
 INSERT INTO topics (name, description) VALUES
     ('consciousness',       'Human consciousness, mind, awareness, and perception'),

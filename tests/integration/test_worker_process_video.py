@@ -264,12 +264,10 @@ def test_upserted_metadata_includes_entities_and_people(mock_save, mock_topic, m
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-@patch("ingestion.worker_lambda.discover_guest_channels")
-def test_process_video_calls_discovery_when_api_key_set(
-    mock_discover, mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor,
-    monkeypatch,
+@patch("ingestion.worker_lambda.enqueue_guests")
+def test_process_video_enqueues_guests_when_present(
+    mock_enqueue, mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor,
 ):
-    monkeypatch.setenv("YOUTUBE_API_KEY", "test_key")
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db()
     gw = _make_gateway(guests=["Graham Hancock"])
@@ -277,11 +275,11 @@ def test_process_video_calls_discovery_when_api_key_set(
     from ingestion.worker_lambda import process_video
     process_video("vid1", "ch1", conn, None, MagicMock(), gw)
 
-    mock_discover.assert_called_once_with(
+    mock_enqueue.assert_called_once_with(
         guest_names=["Graham Hancock"],
         source_video_id="vid1",
+        source_channel_id="ch1",
         db_conn=conn,
-        youtube_api_key="test_key",
     )
 
 
@@ -290,17 +288,15 @@ def test_process_video_calls_discovery_when_api_key_set(
 @patch("ingestion.worker_lambda.get_topic_names", return_value=["consciousness"])
 @patch("ingestion.worker_lambda.get_channel_default_topic", return_value="consciousness")
 @patch("ingestion.worker_lambda._save_payload", return_value="local/path")
-@patch("ingestion.worker_lambda.discover_guest_channels")
-def test_process_video_skips_discovery_when_no_api_key(
-    mock_discover, mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor,
-    monkeypatch,
+@patch("ingestion.worker_lambda.enqueue_guests")
+def test_process_video_skips_enqueue_when_no_guests(
+    mock_enqueue, mock_save, mock_topic, mock_names, mock_api_cls, mock_sponsor,
 ):
-    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
     mock_api_cls.return_value.fetch.return_value = _fake_transcript()
     conn, cur = _make_db()
-    gw = _make_gateway(guests=["Graham Hancock"])
+    gw = _make_gateway(guests=[])
 
     from ingestion.worker_lambda import process_video
     process_video("vid1", "ch1", conn, None, MagicMock(), gw)
 
-    mock_discover.assert_not_called()
+    mock_enqueue.assert_not_called()

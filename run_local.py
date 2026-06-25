@@ -149,6 +149,15 @@ def run_process_pending() -> None:
     db_conn.close()
 
 
+def run_discover_pending() -> None:
+    from core.db import get_connection
+    from ingestion.discovery_worker import run_discovery
+
+    db_conn = get_connection()
+    run_discovery(db_conn)
+    db_conn.close()
+
+
 def run_fetch_articles() -> None:
     from ingestion.article_fetch_lambda import lambda_handler
     result = lambda_handler({}, None)
@@ -239,6 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--channel",                  help="YouTube channel ID (required with --video)")
     parser.add_argument("--fetch",                    action="store_true", help="Run fetch_lambda (YouTube)")
     parser.add_argument("--process-pending",          action="store_true", help="Process all discovered videos")
+    parser.add_argument("--discover-pending",         action="store_true", help="Drain the guest discovery queue")
     parser.add_argument("--fetch-articles",           action="store_true", help="Run article_fetch_lambda (RSS)")
     parser.add_argument("--process-pending-articles", action="store_true", help="Process all discovered articles")
     parser.add_argument("--article",                  help="Article UUID to process")
@@ -246,6 +256,8 @@ if __name__ == "__main__":
 
     if args.fetch:
         run_fetch()
+    elif args.discover_pending:
+        run_discover_pending()
     elif args.process_pending:
         run_process_pending()
     elif args.fetch_articles:

@@ -196,6 +196,125 @@ def test_discover_logs_and_continues_on_api_error():
     assert count == 0
 
 
+# ---------------------------------------------------------------------------
+# enqueue_guests
+# ---------------------------------------------------------------------------
+
+def test_enqueue_guests_inserts_rows():
+    db_conn = MagicMock()
+    cur = db_conn.cursor.return_value.__enter__.return_value
+    cur.rowcount = 1
+
+    from core.channel_discovery import enqueue_guests
+    count = enqueue_guests(["Darius J Wright", "Joe Rogan"], "vid1", "ch1", db_conn)
+
+    assert count == 2
+    db_conn.commit.assert_called_once()
+
+
+def test_enqueue_guests_returns_zero_for_empty_list():
+    db_conn = MagicMock()
+
+    from core.channel_discovery import enqueue_guests
+    count = enqueue_guests([], "vid1", "ch1", db_conn)
+
+    assert count == 0
+    db_conn.cursor.assert_not_called()
+
+
+def test_enqueue_guests_swallows_db_errors():
+    db_conn = MagicMock()
+    db_conn.cursor.side_effect = Exception("DB down")
+
+    from core.channel_discovery import enqueue_guests
+    count = enqueue_guests(["Guest A"], "vid1", "ch1", db_conn)
+
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# process_discovery_queue
+# ---------------------------------------------------------------------------
+
+def test_process_discovery_queue_returns_zero_without_api_key():
+    db_conn = MagicMock()
+
+    from core.channel_discovery import process_discovery_queue
+    count = process_discovery_queue(db_conn, "", max_guests=5)
+
+    assert count == 0
+    db_conn.cursor.assert_not_called()
+
+
+def test_process_discovery_queue_discovers_and_updates_status():
+    db_conn = MagicMock()
+
+    # fetchall returns one pending guest row
+    pending_cur = MagicMock()
+    pending_cur.fetchall.return_value = [
+        (1, "Darius J Wright", "vid1", "ch1"),
+    ]
+
+    # subsequent cursors handle _get_existing_channel_ids and _insert_candidate
+    existing_cur = MagicMock()
+    existing_cur.fetchall.return_value = []  # not in DB
+    existing_cur.rowcount = 1
+
+    call_count = [0]
+    def cursor_factory(*args, **kwargs):
+        ctx = MagicMock()
+        call_count[0] += 1
+        if call_count[0] == 1:
+            ctx.__enter__ = MagicMock(return_value=pending_cur)
+        else:
+            ctx.__enter__ = MagicMock(return_value=existing_cur)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
+    db_conn.cursor.side_effect = cursor_factory
+
+    search_resp = MagicMock()
+    search_resp.json.return_value = {"items": [{"snippet": {"channelId": "UCnew1"}}]}
+
+    details_resp = MagicMock()
+    details_resp.json.return_value = {
+        "items": [{
+            "id": "UCnew1",
+            "snippet": {"title": "Darius Channel", "customUrl": "@darius"},
+            "statistics": {"subscriberCount": "100000"},
+        }]
+    }
+
+    with patch("core.channel_discovery.httpx.get", side_effect=[search_resp, details_resp]):
+        from core.channel_discovery import process_discovery_queue
+        count = process_discovery_queue(db_conn, "fake_key", max_guests=5)
+
+    assert count == 1
+
+
+def test_process_discovery_queue_stops_on_quota_error():
+    db_conn = MagicMock()
+
+    pending_cur = MagicMock()
+    pending_cur.fetchall.return_value = [
+        (1, "Guest A", "vid1", "ch1"),
+        (2, "Guest B", "vid1", "ch1"),
+    ]
+
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=pending_cur)
+    ctx.__exit__ = MagicMock(return_value=False)
+    db_conn.cursor.return_value = ctx
+
+    quota_err = Exception("quotaExceeded: API quota exceeded")
+    with patch("core.channel_discovery.httpx.get", side_effect=quota_err):
+        from core.channel_discovery import process_discovery_queue
+        count = process_discovery_queue(db_conn, "fake_key", max_guests=5)
+
+    # Stopped after first guest; no channels inserted
+    assert count == 0
+
+
 def test_discover_processes_multiple_guests_independently():
     db_conn = MagicMock()
 
