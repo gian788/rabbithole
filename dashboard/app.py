@@ -471,7 +471,7 @@ with tab_channels:
             cols[4].write(searches)
             cols[5].write(f"${cps:.4f}" if cps is not None else "—")
 
-            new_state = cols[6].toggle("", value=row["is_active"], key=f"toggle_ch_{row['id']}")
+            new_state = cols[6].toggle("Active", value=row["is_active"], key=f"toggle_ch_{row['id']}", label_visibility="collapsed")
             if new_state != row["is_active"]:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -570,7 +570,7 @@ with tab_websites:
             cols[4].write(searches)
             cols[5].write(f"${cps:.4f}" if cps is not None else "—")
 
-            new_state = cols[6].toggle("", value=row["is_active"], key=f"toggle_ws_{row['id']}")
+            new_state = cols[6].toggle("Active", value=row["is_active"], key=f"toggle_ws_{row['id']}", label_visibility="collapsed")
             if new_state != row["is_active"]:
                 with conn.cursor() as cur:
                     cur.execute(
