@@ -422,6 +422,8 @@ with tab_channels:
                 c.name,
                 t.name                                                              AS default_topic,
                 c.is_active,
+                c.videos_to_fetch,
+                c.max_videos,
                 COUNT(DISTINCT v.id) FILTER (WHERE v.status = 'completed')         AS indexed_videos,
                 COALESCE(SUM(v.ingestion_cost), 0)                                  AS total_cost,
                 COUNT(DISTINCT q.id)                                                AS search_count,
@@ -433,7 +435,7 @@ with tab_channels:
             LEFT JOIN videos v      ON v.channel_id = c.id
             LEFT JOIN rag_queries q ON c.id = ANY(q.video_ids)
             WHERE c.is_approved = TRUE
-            GROUP BY c.id, c.name, t.name, c.is_active
+            GROUP BY c.id, c.name, t.name, c.is_active, c.videos_to_fetch, c.max_videos
             ORDER BY total_cost DESC
             """
         )
@@ -510,6 +512,36 @@ with tab_channels:
             )
             df_videos["created_at"] = pd.to_datetime(df_videos["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
             st.dataframe(df_videos, use_container_width=True, hide_index=True)
+
+    # ── Channel fetch settings ─────────────────────────────────────────────
+    if rows:
+        st.divider()
+        st.subheader("Channel Fetch Settings")
+        with st.form("channel_fetch_settings"):
+            ch_options = {r["name"]: r["id"] for r in rows}
+            selected_ch_name = st.selectbox("Channel", list(ch_options.keys()))
+            selected_ch = next((r for r in rows if r["id"] == ch_options[selected_ch_name]), None)
+            col_a, col_b = st.columns(2)
+            new_videos_to_fetch = col_a.number_input(
+                "Videos to fetch per run",
+                min_value=1, max_value=50,
+                value=int(selected_ch["videos_to_fetch"] or 10),
+                help="How many recent videos to check per fetch run. Set high for initial backfill — the fetch only inserts videos not already in the DB, so raising this is safe.",
+            )
+            new_max_videos = col_b.number_input(
+                "Max videos (total cap)",
+                min_value=1, max_value=10000,
+                value=int(selected_ch["max_videos"] or 100),
+            )
+            if st.form_submit_button("Save"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE channels SET videos_to_fetch = %s, max_videos = %s WHERE id = %s",
+                        (int(new_videos_to_fetch), int(new_max_videos), ch_options[selected_ch_name]),
+                    )
+                conn.commit()
+                st.success(f"Updated {selected_ch_name}: fetch {new_videos_to_fetch} per run, cap {new_max_videos}.")
+                st.rerun()
 
 # ── Websites ───────────────────────────────────────────────────────────────
 with tab_websites:
