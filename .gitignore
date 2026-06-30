@@ -18,6 +18,7 @@ local_data/
 
 # Claude Code local config
 .claude/
+plan.md
 
 # UI dependencies and build output
 ui/node_modules/
@@ -25,3 +26,4 @@ ui/dist/
 
 # Quality test seed data — contains real transcript excerpts, never commit
 tests/quality/fixtures/seed_chunks.json
+plan.md
